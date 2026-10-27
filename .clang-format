@@ -1,0 +1,73 @@
+---
+BasedOnStyle: Chromium
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowAllArgumentsOnNextLine: false
+IndentCaseLabels: false
+SpacesBeforeTrailingComments: 1
+
+BinPackArguments: false
+BinPackParameters: false
+
+# Allman with few exceptions (namespace, extern block)
+BreakBeforeBraces: Custom
+BraceWrapping:
+    AfterCaseLabel: true
+    AfterClass: true
+    AfterControlStatement: Always
+    AfterEnum: true
+    AfterFunction: true
+    AfterNamespace: false
+    AfterObjCDeclaration: true
+    AfterStruct: true
+    AfterUnion: true
+    AfterExternBlock: false
+    BeforeCatch: true
+    BeforeElse: true
+    BeforeLambdaBody: false
+    BeforeWhile: false
+    IndentBraces: false
+    SplitEmptyFunction: true
+    SplitEmptyRecord: true
+    SplitEmptyNamespace: true
+
+IncludeBlocks: Regroup
+SortIncludes:
+  IgnoreCase: true
+
+IncludeCategories:
+  # UCB
+  - Regex:           '^[<"]tinyuc/'
+    Priority:        2
+    SortPriority:    1
+    CaseSensitive:   true
+  # Thirdparty inclusion
+  - Regex:           '^((<|")(doctest))'
+    Priority:        3
+  # Windows headers before Windows.h
+  - Regex:           '<winsock2.h>'
+    Priority:        6
+    CaseSensitive:   false
+  # Windows headers
+  - Regex:           '<windows.h>'
+    Priority:        7
+    CaseSensitive:   false
+  # Windows headers after Windows.h
+  - Regex:           '<dbghelp.h>'
+    Priority:        8
+    CaseSensitive:   false
+  # Standard library
+  - Regex:           '<[[:alnum:]./]+.h>'
+    Priority:        4
+  # C++ standard library
+  - Regex:           '<[[:alnum:]./]+>'
+    Priority:        5
+  # Anything else (must be last)
+  - Regex:           '.*'
+    Priority:        1
+    SortPriority:    2

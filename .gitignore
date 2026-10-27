@@ -1,0 +1,60 @@
+# Root folders and files
+/build/
+/build[_-]*/
+/install/
+/external/
+/Testing/
+/local_ignore/
+/te?mp/
+/AGENTS-WS.md
+/ext/*
+
+# Don't push doxygen
+/doc/doxygen/html/
+
+# Basic folders
+.vscode/
+.kilo/
+.cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+
+# CMake. Never commit user override's
+CMakeUserPresets.json
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Debug symbols / program database (e.g. vc140.pdb from cl.exe)
+*.pdb
+*.ilk
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Bundled tool binaries (force-track even if .exe)
+!/tools/clang-format/clang-format.exe
+
+# Editor temp/backup files
+*~
+*.bak
+
+# Python compiled files
+*.pyc

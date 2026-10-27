@@ -1,0 +1,37 @@
+/**
+ * This file is part of the TinyUC project
+ * SPDX-FileCopyrightText: © 2026 Åke Svedin <ake@svedin.org>
+ * SPDX-License-Identifier: MIT
+ *
+ * @file version.h
+ * @brief Version and build capability defines.
+ */
+
+#ifndef TINYUC_VERSION_H
+#define TINYUC_VERSION_H
+
+/** @brief Major version number. */
+#define TINYUC_VER_MAJOR @PROJECT_VERSION_MAJOR@
+
+/** @brief Minor version number. */
+#define TINYUC_VER_MINOR @PROJECT_VERSION_MINOR@
+
+/** @brief Patch version number. */
+#define TINYUC_VER_PATCH @PROJECT_VERSION_PATCH@
+
+/**
+ * @brief Version as a string literal, for example @c "1.2.3".
+ */
+#define TINYUC_VER_STRING "@PROJECT_VERSION@"
+
+/**
+ * @brief Numeric combined version for ABI checks and comparisons.
+ *
+ * Calculated as @c MAJOR*10000 + MINOR*100 + PATCH.
+ */
+#define TINYUC_VER ((TINYUC_VER_MAJOR * 10000) + (TINYUC_VER_MINOR * 100) + TINYUC_VER_PATCH)
+
+/** @brief 1 if the library was built as a shared library, 0 if built as a static library. */
+#cmakedefine01 TINYUC_BUILD_SHARED
+
+#endif // TINYUC_VERSION_H

@@ -1,0 +1,218 @@
+# This file is part of the TinyUC project
+# SPDX-FileCopyrightText: 2026 Åke Svedin <ake@svedin.org>
+# SPDX-License-Identifier: MIT
+
+include(cmake/warnings.cmake)
+
+function(tinyuc_target_init name)
+    set(options "")
+    set(oneValueArgs "")
+    set(multiValueArgs LANGUAGE)
+    cmake_parse_arguments(ARGS "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    foreach(_lang ${ARGS_LANGUAGE})
+        if(NOT ${_lang} MATCHES "^C|CXX$")
+            message(FATAL_ERROR "Unknown LANGUAGE argument ${_lang}")
+        endif()
+    endforeach()
+
+    # Public headers require C11 (_Noreturn, restrict, _Generic), so consumers
+    # must build with it too.
+    if("C" IN_LIST ARGS_LANGUAGE)
+        target_compile_features(${name} PUBLIC c_std_11)
+    endif()
+
+    if("CXX" IN_LIST ARGS_LANGUAGE)
+        target_compile_features(${name} PRIVATE c_std_11 cxx_std_11)
+
+        if(NOT MSVC AND NOT APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-stdlib=libstdc++>)
+            target_link_libraries(${name} PUBLIC -lstdc++ -lm)
+        endif()
+    endif()
+
+    # Request access to memcpy_s and friends
+    target_compile_definitions(${name} PRIVATE __STDC_WANT_LIB_EXT1__=1)
+
+    # Enable Unicode support
+    if(MSVC)
+        # Source and execution character sets
+        target_compile_options(${name} PRIVATE /utf-8)
+
+        if(TINYUC_MEMTRACK_BACKTRACE)
+            target_compile_options(${name} PRIVATE "$<$<CONFIG:DEBUG>:/Oy->")
+        endif()
+
+        target_compile_definitions(${name} PRIVATE
+            _UNICODE UNICODE
+            _CRT_SECURE_NO_WARNINGS
+        )
+    elseif(UNIX)
+        target_compile_definitions(${name} PRIVATE
+            _GNU_SOURCE _XOPEN_SOURCE
+        )
+
+        if(TINYUC_MEMTRACK_BACKTRACE)
+            target_compile_options(${name} PRIVATE "$<$<CONFIG:DEBUG>:-fno-omit-frame-pointer>")
+        endif()
+    endif()
+
+    tinyuc_target_set_warnings(${name})
+endfunction()
+
+function(tinyuc_add_executable name)
+    set(options "")
+    set(oneValueArgs "")
+    set(multiValueArgs LANGUAGE)
+    cmake_parse_arguments(ARGS "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    add_executable(${name} ${ARGS_UNPARSED_ARGUMENTS})
+
+    if(ARGS_LANGUAGE)
+        set(init_args LANGUAGE "${ARGS_LANGUAGE}")
+    endif()
+
+    tinyuc_target_init(${name} ${init_args})
+endfunction()
+
+function(tinyuc_add_library name)
+    set(options "")
+    set(oneValueArgs "")
+    set(multiValueArgs LANGUAGE)
+    cmake_parse_arguments(ARGS "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    add_library(${name} ${ARGS_UNPARSED_ARGUMENTS})
+
+    if(ARGS_LANGUAGE)
+        set(init_args LANGUAGE "${ARGS_LANGUAGE}")
+    endif()
+
+    tinyuc_target_init(${name} ${init_args})
+
+    target_compile_definitions(${name} PRIVATE TINYUC_BUILD_LIB)
+
+    if(BUILD_SHARED_LIBS)
+        target_compile_definitions(${name} PUBLIC TINYUC_SHARED_LIB)
+    else()
+        target_compile_definitions(${name} PUBLIC TINYUC_STATIC_LIB)
+    endif()
+
+    if(TINYUC_DEVEL)
+        target_compile_definitions(${name} PUBLIC "$<$<CONFIG:DEBUG>:TINYUC_DEVEL>")
+    endif()
+
+    if(TINYUC_FAST)
+        target_compile_definitions(${name} PUBLIC TINYUC_FAST)
+    endif()
+
+    if(NOT MSVC)
+        set_target_properties(${name} PROPERTIES
+            POSITION_INDEPENDENT_CODE ON
+            C_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON
+        )
+        get_target_property(_type ${name} TYPE)
+
+        if(_type STREQUAL "SHARED_LIBRARY")
+            target_link_options(${name} PRIVATE -Wl,--exclude-libs,ALL)
+        endif()
+    endif()
+endfunction()
+
+# Convenience function to add public headers residing in another directory than CMAKE_CURRENT_SOURCE_DIR
+function(tinyuc_target_public_headers target)
+    cmake_parse_arguments(
+        ARGS # prefix of output variables
+        "" # list of names of the boolean arguments (only defined ones will be true)
+        "DIRECTORY" # list of names of mono-valued arguments
+        "FILES" # list of names of multi-valued arguments (output variables are lists)
+        ${ARGN} # arguments of the function to parse, here we take the all original ones
+    )
+
+    if(NOT TARGET ${target})
+        message(FATAL_ERROR "Target ${target} does not exist")
+    endif()
+
+    set(BASE_DIR ${CMAKE_SOURCE_DIR}/include)
+
+    foreach(_header ${ARGS_FILES})
+        if(ARGS_DIRECTORY)
+            list(APPEND REL_FILES ${BASE_DIR}/${ARGS_DIRECTORY}/${_header})
+        else()
+            list(APPEND REL_FILES ${BASE_DIR}/${_header})
+        endif()
+    endforeach()
+
+    target_sources(${target} PUBLIC FILE_SET HEADERS BASE_DIRS ${BASE_DIR} FILES ${REL_FILES})
+endfunction()
+
+# Nothing special for now
+function(tinyuc_target_sources target)
+    target_sources(${target} ${ARGN})
+endfunction()
+
+function(tinyuc_target_private_headers target)
+    message(FATAL_ERROR "Not implemented")
+endfunction()
+
+function(tinyuc_install target)
+    install(
+        TARGETS ${target}
+        EXPORT tinyucTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        FILE_SET HEADERS DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endfunction()
+
+# Macro to generate files based on template headers
+# Calls the preprocessor to do the processing
+# Takes:
+# - template header file
+# - output header file
+# - output source file
+# - list of common defines
+# - list of defines for header
+# - list of defines for source
+function(tinyuc_generate_from_template)
+    set(options)
+    set(oneValueArgs TEMPLATE HEADER SOURCE)
+    set(multiValueArgs COMMON_DEFINES HEADER_DEFINES SOURCE_DEFINES HEADER_INCLUDES)
+    cmake_parse_arguments(GEN "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    # Update relative paths
+    set(INC_PATH_HEADER "<tinyuc/${GEN_HEADER}>")
+    set(GEN_TEMPLATE ${CMAKE_SOURCE_DIR}/include/tinyuc/${GEN_TEMPLATE})
+    set(GEN_HEADER ${CMAKE_SOURCE_DIR}/include/tinyuc/${GEN_HEADER})
+    set(GEN_SOURCE ${CMAKE_SOURCE_DIR}/src/tinyuc/${GEN_SOURCE})
+
+    
+    set(PYTHON_SCRIPT ${CMAKE_SOURCE_DIR}/tools/gen_template.py)
+    set(PYTHON_INTERPRETER ${Python_EXECUTABLE})
+    
+    set(DEFS_HEADER "")
+    set(DEFS_SOURCE "")
+    set(DEFS_HEADER_INCLUDES "")
+
+    foreach(INC ${GEN_HEADER_INCLUDES})
+        list(APPEND DEFS_HEADER_INCLUDES "-I${INC}")
+    endforeach()
+
+    foreach(DEF ${GEN_COMMON_DEFINES} ${GEN_HEADER_DEFINES})
+        list(APPEND DEFS_HEADER "-D${DEF}")
+    endforeach()
+
+    foreach(DEF ${GEN_COMMON_DEFINES} ${GEN_SOURCE_DEFINES})
+        list(APPEND DEFS_SOURCE "-D${DEF}")
+    endforeach()
+
+    add_custom_command(
+        OUTPUT ${GEN_HEADER} ${GEN_SOURCE}
+        COMMAND ${Python_EXECUTABLE} ${PYTHON_SCRIPT} ${DEFS_HEADER} -o ${GEN_HEADER} ${GEN_TEMPLATE} ${DEFS_HEADER_INCLUDES} -H
+        COMMAND ${Python_EXECUTABLE} ${PYTHON_SCRIPT} ${DEFS_SOURCE} -o ${GEN_SOURCE} ${GEN_TEMPLATE} -I ${INC_PATH_HEADER}
+        DEPENDS ${GEN_TEMPLATE}
+        COMMENT "Generating ${GEN_HEADER}"
+        VERBATIM
+    )
+endfunction()
