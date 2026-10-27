@@ -1,24 +1,28 @@
-# UCB
+# TinyUC
 
-Probably stands for: Unified C Base
-It may, or may not, have another hidden meaning.
+TinyUC - Tiny Unicode
 
-## Goal
+A small C library for unicode handling with focus on UTF-8.
 
-The goal of this C library is to abstract common platform specific functionality
-and provide a unified interface for common operations on supported platforms.
+## Features
 
-Due to abstraction, it is impossible to be as performant as direct C implementation,
-nor C++ templating libraries. Although it aims to be as performant as possible while keeping
-a sane API for usage.
+- Full Normalization (NFC, NFD, NFKC, NFKD)
+- Case Folding
+- Case Mapping
+- Grapheme Cluster Boundaries
 
-The design is to use [UTF-8 everywhere](https://utf8everywhere.org/), unless otherwise
-specified.
+It aims to be small, portable and fast.
+
+## Limitations
+
+- No convertion from/to UTF-16 or UTF-32
+- No plans for collation other than probably DUCET.
+- No plans for regular expression support.
 
 ## Target
 
 - C11 for the core library
-  - Supports calls from C++
+  - Headers declare `extern "C"` for import into C++
   - Testing [doctest](https://github.com/doctest/doctest)] use C++
 - OS:
   - Windows
@@ -33,65 +37,6 @@ specified.
 See [dependencies](#dependencies) for exact versions.
 
 Anything not listed above is not tested and is not a priority. Please help out if you want additional support and are able to maintain it.
-
-## Features
-
-- Simplified error handling
-  - Handles errno/GetLastError() and converts values to a unified error code.
-  - Non-trivial functions either:
-    - Return an error code.
-    - Return a result struct containing error code and the expected result.
-    - Calls an optional user-defined abort function on fatal errors (for instance ucb_malloc).
-- Memory management
-  - Replacement for malloc/calloc/realloc/free
-  - Optional memory tracking with manual leak detections.
-    - Void macros for release builds to ensure optimal performance.
-- New string type
-  - Always UTF-8 encoded
-  - Keep tracks of C string length.
-  - Internally NULL terminated allows use with C functions.
-  - Large set of string operations and convenience functions.
-- Basic unicode support
-  - Full Normalization (NFC, NFD, NFKC, NFKD)
-  - Case Folding
-  - Case Mapping
-  - Possibly adding support for switchable backend.
-  - Collation may use system calls if available (not there yet)
-- Threading
-  - Threading and mutex
-- Buffer helpers
-- Filesystem
-  - Lexical path abstraction, file/stream I/O and a portable filesystem API.
-  - Queries (exists/kind/stat), copy, move, remove and directory iteration.
-  - Optional extended helpers in the `_ex.h` companion headers.
-
-## Minor Features
-
-- Cross-platform C string function wrappers (like ucb_asprintf)
-- Platform macros
-- Utility macros
-
-## Future plans
-
-- Add more string operations
-- Process launching
-- Argument parsing
-- Settings helper
-- ???
-
-## Limitations
-
-- Locale agnostic
-  - No plan for date or time functions (yet).
-- Does not plan to be a full featured unicode library.
-  - No plans for collation other than probably DUCET.
-    - Use system calls if available.
-  - Conversions to/from UTF-16/UTF-32 may be added later.
-  - Currently expects UTF-8 on Linux and UTF-16 on Windows.
-    - Use Windows APIs for conversions when needed.
-- No plan for networking, JSON, XML or such utilities.
-- No plan for GUI or graphics.
-  - This is a console library only.
 
 ## Dependencies
 
@@ -120,20 +65,20 @@ Simply use cmake.
 Linux with GNU Make:
 
 ```bash
-git clone git@github.com:herring-swe/ucb.git
-mkdir ucb-build
-cd ucb-build
-cmake ../ucb -G "Unix Makefiles"
+git clone git@github.com:herring-swe/tinyuc.git
+mkdir tinyuc-build
+cd tinyuc-build
+cmake ../tinyuc -G "Unix Makefiles"
 cmake --build .
 ```
 
 For instance on Windows with Visual Studio 2022:
 
 ```bash
-git clone git@github.com:herring-swe/ucb.git
-mkdir ucb-build
-cd ucb-build
-cmake ../ucb -G "Visual Studio 17 2022" -A x64
+git clone git@github.com:herring-swe/tinyuc.git
+mkdir tinyuc-build
+cd tinyuc-build
+cmake ../tinyuc -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
 ```
 

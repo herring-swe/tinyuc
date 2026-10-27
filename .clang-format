@@ -41,7 +41,7 @@ SortIncludes:
   IgnoreCase: true
 
 IncludeCategories:
-  # UCB
+  # TinyUC
   - Regex:           '^[<"]tinyuc/'
     Priority:        2
     SortPriority:    1

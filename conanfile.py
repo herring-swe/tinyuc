@@ -1,6 +1,7 @@
 # This file is part of the TinyUC project
 # SPDX-FileCopyrightText: 2026 Åke Svedin <ake@svedin.org>
 # SPDX-License-Identifier: MIT
+# TODO: This file needs to be verified
 
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
@@ -8,43 +9,33 @@ from conan.tools.build import can_run
 from conan.tools.scm import Git
 
 
-class UcbConan(ConanFile):
-    name = "ucb"
-    version = "0.1.0"
+class TinyucConan(ConanFile):
+    name = "tinyuc"
+    version = "0.4.0"
     languages = "C"
 
-    description = "A cross-platform C library for essentials"
+    description = "A small C library for unicode handling with focus on UTF-8"
     license = "MIT"
     author = "Åke Svedin - <ake@svedin.org>"
-    homepage = "https://github.com/herring-swe/ucb"
-    url = "https://github.com/herring-swe/ucb"
+    homepage = "https://github.com/herring-swe/tinyuc"
+    url = "https://github.com/herring-swe/tinyuc"
     topics = (
         "c",
-        "cross-platform",
-        "essentials",
-        "beaver",
         "library",
+        "unicode",
+        "normalization",
+        "case-folding",
+        "grapheme",
     )  # optional topic
 
     settings = "os", "compiler", "build_type", "arch"
     options = {
         "shared": [True, False],
         "fPIC": [True, False],
-        "with_beaver": [True, False],  # Yes, we want beaver mode
-        "with_utf8": [True, False],
-        "with_iconv": [None, "iconv"],
     }
     default_options = {
         "shared": False,
         "fPIC": True,
-        "with_beaver": False,  # But maybe not by default :'(
-        "with_utf8": True,
-        "with_iconv": None,
-    }
-    option_description = {
-        "with_beaver": "Beaver mode or serious mode - you decide",
-        "with_utf8": "With UTF-8 library",
-        "with_iconv": "Use iconv for better encoding support",
     }
 
     exports_sources = (
@@ -65,12 +56,6 @@ class UcbConan(ConanFile):
     def config_options(self):
         if self.settings.os == "Windows":
             self.options.rm_safe("fPIC")
-        if not self.options["utf8"]:
-            self.options.rm_safe("with_iconv")
-
-    def requirements(self):
-        if self.options.get_safe("with_iconv"):
-            self.requires("libiconv/[^1.18]")
 
     def build_requirements(self):
         self.tool_requires("cmake/[^3.28]")
@@ -95,8 +80,6 @@ class UcbConan(ConanFile):
 
     def generate(self):
         tc = CMakeToolchain(self, generator="Ninja")
-        # tc.variables["UCB_CLANG_TIDY"] = False
-        tc.variables["UCB_BEAVER_MODE"] = self.options.with_beaver
         tc.generate()
         deps = CMakeDeps(self)
         deps.generate()
