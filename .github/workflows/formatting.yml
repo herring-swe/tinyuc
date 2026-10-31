@@ -1,0 +1,29 @@
+name: Check formatting
+
+on:
+  push:
+    branches: [ "main", "release/**" ]
+  pull_request:
+    branches: [ "main", "release/**" ]
+  workflow_dispatch:
+
+jobs:
+  clang-format:
+    name: Check clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: pip install -r tools/pyreq-dev.txt
+
+      # Uses the clang-format in the repo
+      - name: Check all formatting
+        run: python tools/format.py
