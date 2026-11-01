@@ -22,8 +22,13 @@ option(BUILD_TESTING "Build tests" ON)
 
 # Internal options and details
 option(TINYUC_CLANG_TIDY "Use clang-tidy" OFF)
-option(TINYUC_DEVEL "Enables development logging and assertions for debug builds" ON)
 option(TINYUC_BENCH_COMPARE "Benchmark against external Unicode libraries (utf8proc, ICU)" OFF)
+option(TINYUC_GENERATE_UNICODE_DATA "Generate the Unicode data headers in the source tree" OFF)
+option(TINYUC_VERIFY_UNICODE_DATA "Verify that the generated Unicode data headers match the source tree" OFF)
+
+if(TINYUC_GENERATE_UNICODE_DATA AND TINYUC_VERIFY_UNICODE_DATA)
+    message(FATAL_ERROR "TINYUC_GENERATE_UNICODE_DATA and TINYUC_VERIFY_UNICODE_DATA are mutually exclusive")
+endif()
 
 # SIMD-accelerated UTF-8 validation and counting. Selects which ISA tiers to
 # compile; a runtime check still guards every call. OFF keeps the portable
@@ -31,18 +36,21 @@ option(TINYUC_BENCH_COMPARE "Benchmark against external Unicode libraries (utf8p
 # and dispatches at runtime (the default).
 set(TINYUC_SIMD "AUTO" CACHE STRING "SIMD-accelerated UTF-8 paths (OFF, SSSE3, AVX2, AUTO)")
 set_property(CACHE TINYUC_SIMD PROPERTY STRINGS OFF SSSE3 AVX2 AUTO)
+
 if(NOT TINYUC_SIMD MATCHES "^(OFF|SSSE3|AVX2|AUTO)$")
     message(FATAL_ERROR "TINYUC_SIMD must be one of OFF, SSSE3, AVX2, AUTO (got '${TINYUC_SIMD}')")
 endif()
 
 # The SIMD kernels are x86-only for now (SSSE3/AVX2).
 set(TINYUC_SIMD_X86 FALSE)
+
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
     set(TINYUC_SIMD_X86 TRUE)
 endif()
 
 set(TINYUC_SIMD_SSSE3_ENABLED FALSE)
 set(TINYUC_SIMD_AVX2_ENABLED FALSE)
+
 if(TINYUC_SIMD STREQUAL "AUTO")
     if(TINYUC_SIMD_X86)
         set(TINYUC_SIMD_SSSE3_ENABLED TRUE)
@@ -52,11 +60,13 @@ elseif(TINYUC_SIMD STREQUAL "SSSE3")
     if(NOT TINYUC_SIMD_X86)
         message(FATAL_ERROR "TINYUC_SIMD=SSSE3 is only supported on x86")
     endif()
+
     set(TINYUC_SIMD_SSSE3_ENABLED TRUE)
 elseif(TINYUC_SIMD STREQUAL "AVX2")
     if(NOT TINYUC_SIMD_X86)
         message(FATAL_ERROR "TINYUC_SIMD=AVX2 is only supported on x86")
     endif()
+
     set(TINYUC_SIMD_AVX2_ENABLED TRUE)
 endif()
 
@@ -101,7 +111,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/unicode_data.cmake)
 
 tinyuc_add_library(tinyuc LANGUAGE C)
 
-if(TARGET unicode_data)
+if(TINYUC_GENERATE_UNICODE_DATA AND TARGET unicode_data)
     add_dependencies(tinyuc unicode_data)
 endif()
 
@@ -119,14 +129,12 @@ tinyuc_target_sources(tinyuc
     src/private/simd.h
     src/private/utf8_iter.h
     src/private/utf8_lookup_tables.h
+    ${UNICODE_HEADERS}
 
     PRIVATE
     src/helpers.c
     src/enum.c
     src/unicode.c
-
-    PRIVATE FILE_SET generated_data TYPE HEADERS BASE_DIRS "${UNICODE_DATA_DIR}" FILES
-    ${UNICODE_HEADERS}
 )
 
 if(TINYUC_SIMD_SSSE3_ENABLED OR TINYUC_SIMD_AVX2_ENABLED)
@@ -137,6 +145,7 @@ if(TINYUC_SIMD_SSSE3_ENABLED)
     if(NOT MSVC)
         set_source_files_properties(src/simd_ssse3.c PROPERTIES COMPILE_OPTIONS "-mssse3")
     endif()
+
     target_sources(tinyuc PRIVATE src/simd_ssse3.c)
     target_compile_definitions(tinyuc PRIVATE TINYUC_SIMD_SSSE3)
 endif()
@@ -147,14 +156,9 @@ if(TINYUC_SIMD_AVX2_ENABLED)
     else()
         set_source_files_properties(src/simd_avx2.c PROPERTIES COMPILE_OPTIONS "-mavx2")
     endif()
+
     target_sources(tinyuc PRIVATE src/simd_avx2.c)
     target_compile_definitions(tinyuc PRIVATE TINYUC_SIMD_AVX2)
-endif()
-
-if(TINYUC_SIMD_SSSE3_ENABLED OR TINYUC_SIMD_AVX2_ENABLED)
-    message(STATUS "TinyUC SIMD tiers: SSSE3=${TINYUC_SIMD_SSSE3_ENABLED} AVX2=${TINYUC_SIMD_AVX2_ENABLED}")
-else()
-    message(STATUS "TinyUC SIMD tiers: none (portable C)")
 endif()
 
 if(BUILD_TESTING)
@@ -197,3 +201,43 @@ install(
     ${CMAKE_CURRENT_BINARY_DIR}/tinyucConfigVersion.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tinyuc
 )
+
+# ------------------------------- Config status ------------------------------ #
+
+if(is_multi_config)
+    set(TINYUC_BUILD_CONFIG "Multi-Config")
+else()
+    set(TINYUC_BUILD_CONFIG "${CMAKE_BUILD_TYPE}")
+endif()
+
+if(BUILD_SHARED_LIBS)
+    set(TINYUC_LIBRARY_TYPE "Shared")
+else()
+    set(TINYUC_LIBRARY_TYPE "Static")
+endif()
+
+set(SIMD_MODE "${TINYUC_SIMD}")
+if("${TINYUC_SIMD}" STREQUAL "AUTO")
+    set(_modes "")
+    if(TINYUC_SIMD_AVX2_ENABLED)
+        list(APPEND _modes "AVX2")
+    endif()
+
+    if(TINYUC_SIMD_SSSE3_ENABLED)
+        list(APPEND _modes "SSSE3")
+    endif()
+
+    string(REPLACE ";" ", " _modes "${_modes}")
+    set(SIMD_MODE "${SIMD_MODE} (${_modes})")
+endif()
+
+message(STATUS "---- Build Version ---------------------------------------------------")
+message(STATUS "                Version: ${PROJECT_VERSION}")
+message(STATUS "           Library type: ${TINYUC_LIBRARY_TYPE} ${TINYUC_BUILD_CONFIG}")
+message(STATUS "                   SIMD: ${SIMD_MODE}")
+message(STATUS "----------------------------------------------------------------------")
+message(STATUS "                  Tests: ${BUILD_TESTING}")
+message(STATUS "             Clang Tidy: ${TINYUC_CLANG_TIDY}")
+message(STATUS "           Generate UCD: ${TINYUC_GENERATE_UNICODE_DATA}")
+message(STATUS "  Comparison Benchmarks: ${TINYUC_BENCH_COMPARE}")
+message(STATUS "----------------------------------------------------------------------")

@@ -25,9 +25,6 @@ set(GRAPHEME_TEST_FILE "${UNICODE_DATA_DIR}/GraphemeBreakTest.txt")
 # endif()
 enable_language(CXX)
 
-# Enable OpenMP in future maybe
-find_package(OpenMP)
-
 tinyuc_add_executable(tinyuc_tests LANGUAGE CXX)
 
 tinyuc_target_sources(tinyuc_tests PRIVATE
@@ -51,16 +48,11 @@ target_compile_definitions(tinyuc_tests PRIVATE GRAPHEME_TEST_FILE="${GRAPHEME_T
 target_compile_definitions(tinyuc_tests PRIVATE TINYUC_TEST_EXPECTED_VERSION="${PROJECT_VERSION}")
 
 target_link_libraries(tinyuc_tests PRIVATE tinyuc)
+if(TARGET unicode_test_data)
+    add_dependencies(tinyuc_tests unicode_test_data)
+endif()
 
 target_include_directories(tinyuc_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-if(OpenMP_FOUND)
-    target_link_libraries(tinyuc_tests PRIVATE OpenMP::OpenMP_CXX)
-    target_compile_definitions(tinyuc_tests PRIVATE USE_OPENMP)
-
-    # target_link_libraries(tinyuc_tests PRIVATE $<$<CONFIG:Release>:OpenMP::OpenMP_CXX>)
-    # target_compile_definitions(tinyuc_tests PRIVATE $<$<CONFIG:Release>:USE_OPENMP>)
-endif()
 
 set(doctest_VERSION 2.4.12)
 
@@ -98,6 +90,9 @@ target_sources(tinyuc_benchmarks PRIVATE
     ucd_corpus.cpp
 )
 target_link_libraries(tinyuc_benchmarks PRIVATE tinyuc_bench tinyuc)
+if(TARGET unicode_test_data)
+    add_dependencies(tinyuc_benchmarks unicode_test_data)
+endif()
 target_include_directories(tinyuc_benchmarks PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/bench

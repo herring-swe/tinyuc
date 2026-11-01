@@ -97,14 +97,6 @@ function(tinyuc_add_library name)
         target_compile_definitions(${name} PUBLIC TINYUC_STATIC_LIB)
     endif()
 
-    if(TINYUC_DEVEL)
-        target_compile_definitions(${name} PUBLIC "$<$<CONFIG:DEBUG>:TINYUC_DEVEL>")
-    endif()
-
-    if(TINYUC_FAST)
-        target_compile_definitions(${name} PUBLIC TINYUC_FAST)
-    endif()
-
     if(NOT MSVC)
         set_target_properties(${name} PROPERTIES
             POSITION_INDEPENDENT_CODE ON

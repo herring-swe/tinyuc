@@ -13,12 +13,12 @@
 #include "private/buffer.h"
 #include "private/helpers.h"
 #include "private/simd.h"
+#include "private/unicode/unicode_combine.h"
+#include "private/unicode/unicode_decomp.h"
+#include "private/unicode/unicode_defines.h"
+#include "private/unicode/unicode_mapping.h"
+#include "private/unicode/unicode_props.h"
 #include "private/utf8_iter.h"
-#include "unicode_combine.h"
-#include "unicode_decomp.h"
-#include "unicode_defines.h"
-#include "unicode_mapping.h"
-#include "unicode_props.h"
 
 #include <assert.h>
 #include <inttypes.h>

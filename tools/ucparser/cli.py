@@ -14,6 +14,11 @@ from .stats import print_stats
 def main():
     ap = ArgumentParser(description="Unicode Character Database parser")
     ap.add_argument("--debug", action="store_true", help="Enable debug output")
+    ap.add_argument(
+        "--output-dir",
+        default="",
+        help="Directory for generated headers (default: current directory)",
+    )
 
     args = ap.parse_args()
 
@@ -39,7 +44,7 @@ def main():
     try:
         ucparser = UnicodeDataParser()
         ucparser.parse_all()
-        ucparser.write_templates()
+        ucparser.write_templates(output_dir=args.output_dir)
         print_stats(ucparser)
     except ParseError as e:
         print(f"Parse error: {e}", file=sys.stderr)

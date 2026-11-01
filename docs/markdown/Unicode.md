@@ -1,9 +1,20 @@
 # Unicode implementation
 
 The unicode module operates on UTF-8 encoded strings. It is built on
-compile-time generated Unicode Character Database (UCD) tables that are
-downloaded and processed by `tools/ucparser.py` during the build. No runtime
-data files or external dependencies are needed.
+compile-time generated Unicode Character Database (UCD) tables kept in
+`src/private/unicode/` as internal headers. The tables are generated from the
+official UCD files by `tools/ucparser.py` and checked in, so a normal build
+needs no Unicode data, Python or network access. No runtime data files or
+external dependencies are needed.
+
+The official UCD files are shipped compressed in `data/ucd/` and extracted on
+demand. A local file that does not match its expected hash is downloaded
+again, which keeps version updates manageable.
+
+Regenerate the headers after a UCD or parser change with
+`-DTINYUC_GENERATE_UNICODE_DATA=ON`. To check that the checked-in headers match
+the generator output without modifying the source tree, configure with
+`-DTINYUC_VERIFY_UNICODE_DATA=ON` and build the `verify_unicode_data` target.
 
 ## Supported features
 
