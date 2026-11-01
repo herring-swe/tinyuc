@@ -15,6 +15,7 @@
 #include "tinyuc/unicode.h"
 
 #include "microbench.h"
+#include "private/utf8_iter.h"
 #include "ucd_corpus.h"
 
 #ifdef TINYUC_BENCH_UTF8PROC
@@ -230,6 +231,141 @@ void normalize_corpus_icu()
 }
 #endif // TINYUC_BENCH_ICU
 
+/* -------------------------------------------------------------------------- */
+/*                            UTF-8 iterator A/B                              */
+/* -------------------------------------------------------------------------- */
+
+volatile std::uint64_t g_iter_sink = 0;
+
+/// ~1 MiB of ASCII-heavy text, the common case for real-world input.
+const std::string& ascii_buffer()
+{
+    static const std::string data = [] {
+        static const char unit[] = "The quick brown fox jumps over the lazy dog. 0123456789\n";
+        std::string text;
+        text.reserve(1u << 20);
+        while (text.size() < (1u << 20))
+            text += unit;
+        return text;
+    }();
+    return data;
+}
+
+/// All five source forms of every corpus entry concatenated (non-ASCII heavy).
+const std::string& corpus_buffer()
+{
+    static const std::string data = [] {
+        std::string text;
+        for (const ucd_norm_case& test : corpus())
+        {
+            text += test.input;
+            text += test.nfc;
+            text += test.nfd;
+            text += test.nfkc;
+            text += test.nfkd;
+        }
+        return text;
+    }();
+    return data;
+}
+
+/// Sum every codepoint via a decoder so the work cannot be optimized away.
+template <typename Decode>
+std::uint64_t decode_sum(const std::string& text, Decode decode)
+{
+    const unsigned char* iter = reinterpret_cast<const unsigned char*>(text.data());
+    const unsigned char* const last = iter + text.size();
+    std::uint64_t sum = 0;
+    while (iter < last)
+        sum += decode(&iter);
+    return sum;
+}
+
+/// Count codepoints in both buffers with one decoder implementation.
+template <typename Count>
+std::uint64_t count_both(Count count)
+{
+    return static_cast<std::uint64_t>(count(ascii_buffer().data(), ascii_buffer().size())) +
+           static_cast<std::uint64_t>(count(corpus_buffer().data(), corpus_buffer().size()));
+}
+
+void decode_pass()
+{
+    g_iter_sink += decode_sum(ascii_buffer(), tinyuc_utf8_decode);
+    g_iter_sink += decode_sum(corpus_buffer(), tinyuc_utf8_decode);
+}
+
+void count_pass()
+{
+    g_iter_sink += count_both(tinyuc_utf8_count);
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              SIMD validation                               */
+/* -------------------------------------------------------------------------- */
+
+/// Scalar reference validator (independent of the library implementation).
+bool scalar_validate(const char* text, size_t len)
+{
+    const unsigned char* b = reinterpret_cast<const unsigned char*>(text);
+    size_t i = 0;
+    while (i < len)
+    {
+        unsigned c = b[i];
+        if (c < 0x80)
+        {
+            i++;
+        }
+        else if ((c & 0xE0u) == 0xC0u)
+        {
+            if (i + 1 >= len || (b[i + 1] & 0xC0u) != 0x80u)
+                return false;
+            i += 2;
+        }
+        else if ((c & 0xF0u) == 0xE0u)
+        {
+            if (i + 2 >= len || (b[i + 1] & 0xC0u) != 0x80u || (b[i + 2] & 0xC0u) != 0x80u)
+                return false;
+            i += 3;
+        }
+        else if ((c & 0xF8u) == 0xF0u)
+        {
+            if (i + 3 >= len || (b[i + 1] & 0xC0u) != 0x80u || (b[i + 2] & 0xC0u) != 0x80u ||
+                (b[i + 3] & 0xC0u) != 0x80u)
+                return false;
+            i += 4;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Validate both buffers through the library (SIMD when built with TINYUC_SIMD).
+void validate_lib_pass()
+{
+    g_iter_sink +=
+        (tinyuc_validate(ascii_buffer().data(), ascii_buffer().size(), nullptr) == TINYUC_OK);
+    g_iter_sink +=
+        (tinyuc_validate(corpus_buffer().data(), corpus_buffer().size(), nullptr) == TINYUC_OK);
+}
+
+/// Validate both buffers with the portable reference above.
+void validate_scalar_pass()
+{
+    g_iter_sink += scalar_validate(ascii_buffer().data(), ascii_buffer().size());
+    g_iter_sink += scalar_validate(corpus_buffer().data(), corpus_buffer().size());
+}
+
+/// Count both buffers through the library (SIMD when built with TINYUC_SIMD).
+void count_lib_pass()
+{
+    g_iter_sink += (std::uint64_t)tinyuc_num_cp(ascii_buffer().data(), ascii_buffer().size());
+    g_iter_sink += (std::uint64_t)tinyuc_num_cp(corpus_buffer().data(), corpus_buffer().size());
+}
+
 } // namespace
 
 void register_unicode_benchmarks(tinyuc::microbench::benchmark& bench)
@@ -264,4 +400,30 @@ void register_unicode_benchmarks(tinyuc::microbench::benchmark& bench)
                    normalize_corpus_icu);
     quick.add_ref("normalization-icu", tinyuc::microbench::expectation::none);
 #endif
+
+    tinyuc::microbench::suite& iter = bench.add_suite(
+        "utf8-decoder",
+        "UTF-8 decoder and counter. Each call scans an ASCII-heavy ~1 MiB buffer and the "
+        "concatenated UCD corpus.");
+
+    iter.add_test("decode", "Branch-chain decoder: sum codepoints", decode_pass);
+    iter.add_test("count", "Scalar count over the same buffers", count_pass);
+
+    tinyuc::microbench::suite& simd = bench.add_suite(
+        "utf8-simd",
+        "SIMD-accelerated UTF-8 paths (controlled by -DTINYUC_SIMD, default AUTO). The library "
+        "rows use the best tier the CPU supports; the scalar rows are independent references. "
+        "Each call scans the same ASCII-heavy ~1 MiB buffer and concatenated corpus.");
+
+    tinyuc::microbench::test& validate_lib =
+        simd.add_test("validate-lib", "tinyuc_validate over both buffers", validate_lib_pass);
+    simd.add_test("validate-scalar",
+                  "Portable reference validator over the same buffers",
+                  validate_scalar_pass);
+    validate_lib.add_ref("validate-scalar", tinyuc::microbench::expectation::none);
+
+    tinyuc::microbench::test& count_lib =
+        simd.add_test("count-lib", "tinyuc_num_cp over both buffers", count_lib_pass);
+    simd.add_test("count-scalar", "Portable scalar count over the same buffers", count_pass);
+    count_lib.add_ref("count-scalar", tinyuc::microbench::expectation::none);
 }

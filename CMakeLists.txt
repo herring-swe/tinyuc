@@ -25,6 +25,41 @@ option(TINYUC_CLANG_TIDY "Use clang-tidy" OFF)
 option(TINYUC_DEVEL "Enables development logging and assertions for debug builds" ON)
 option(TINYUC_BENCH_COMPARE "Benchmark against external Unicode libraries (utf8proc, ICU)" OFF)
 
+# SIMD-accelerated UTF-8 validation and counting. Selects which ISA tiers to
+# compile; a runtime check still guards every call. OFF keeps the portable
+# implementation only. AUTO compiles every tier supported by the architecture
+# and dispatches at runtime (the default).
+set(TINYUC_SIMD "AUTO" CACHE STRING "SIMD-accelerated UTF-8 paths (OFF, SSSE3, AVX2, AUTO)")
+set_property(CACHE TINYUC_SIMD PROPERTY STRINGS OFF SSSE3 AVX2 AUTO)
+if(NOT TINYUC_SIMD MATCHES "^(OFF|SSSE3|AVX2|AUTO)$")
+    message(FATAL_ERROR "TINYUC_SIMD must be one of OFF, SSSE3, AVX2, AUTO (got '${TINYUC_SIMD}')")
+endif()
+
+# The SIMD kernels are x86-only for now (SSSE3/AVX2).
+set(TINYUC_SIMD_X86 FALSE)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
+    set(TINYUC_SIMD_X86 TRUE)
+endif()
+
+set(TINYUC_SIMD_SSSE3_ENABLED FALSE)
+set(TINYUC_SIMD_AVX2_ENABLED FALSE)
+if(TINYUC_SIMD STREQUAL "AUTO")
+    if(TINYUC_SIMD_X86)
+        set(TINYUC_SIMD_SSSE3_ENABLED TRUE)
+        set(TINYUC_SIMD_AVX2_ENABLED TRUE)
+    endif()
+elseif(TINYUC_SIMD STREQUAL "SSSE3")
+    if(NOT TINYUC_SIMD_X86)
+        message(FATAL_ERROR "TINYUC_SIMD=SSSE3 is only supported on x86")
+    endif()
+    set(TINYUC_SIMD_SSSE3_ENABLED TRUE)
+elseif(TINYUC_SIMD STREQUAL "AVX2")
+    if(NOT TINYUC_SIMD_X86)
+        message(FATAL_ERROR "TINYUC_SIMD=AVX2 is only supported on x86")
+    endif()
+    set(TINYUC_SIMD_AVX2_ENABLED TRUE)
+endif()
+
 # External includes
 include(GNUInstallDirs)
 
@@ -81,6 +116,9 @@ tinyuc_target_sources(tinyuc
     PRIVATE FILE_SET internal_headers TYPE HEADERS BASE_DIRS src FILES
     src/private/buffer.h
     src/private/helpers.h
+    src/private/simd.h
+    src/private/utf8_iter.h
+    src/private/utf8_lookup_tables.h
 
     PRIVATE
     src/helpers.c
@@ -90,6 +128,34 @@ tinyuc_target_sources(tinyuc
     PRIVATE FILE_SET generated_data TYPE HEADERS BASE_DIRS "${UNICODE_DATA_DIR}" FILES
     ${UNICODE_HEADERS}
 )
+
+if(TINYUC_SIMD_SSSE3_ENABLED OR TINYUC_SIMD_AVX2_ENABLED)
+    target_sources(tinyuc PRIVATE src/simd_support.c)
+endif()
+
+if(TINYUC_SIMD_SSSE3_ENABLED)
+    if(NOT MSVC)
+        set_source_files_properties(src/simd_ssse3.c PROPERTIES COMPILE_OPTIONS "-mssse3")
+    endif()
+    target_sources(tinyuc PRIVATE src/simd_ssse3.c)
+    target_compile_definitions(tinyuc PRIVATE TINYUC_SIMD_SSSE3)
+endif()
+
+if(TINYUC_SIMD_AVX2_ENABLED)
+    if(MSVC)
+        set_source_files_properties(src/simd_avx2.c PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    else()
+        set_source_files_properties(src/simd_avx2.c PROPERTIES COMPILE_OPTIONS "-mavx2")
+    endif()
+    target_sources(tinyuc PRIVATE src/simd_avx2.c)
+    target_compile_definitions(tinyuc PRIVATE TINYUC_SIMD_AVX2)
+endif()
+
+if(TINYUC_SIMD_SSSE3_ENABLED OR TINYUC_SIMD_AVX2_ENABLED)
+    message(STATUS "TinyUC SIMD tiers: SSSE3=${TINYUC_SIMD_SSSE3_ENABLED} AVX2=${TINYUC_SIMD_AVX2_ENABLED}")
+else()
+    message(STATUS "TinyUC SIMD tiers: none (portable C)")
+endif()
 
 if(BUILD_TESTING)
     enable_testing()

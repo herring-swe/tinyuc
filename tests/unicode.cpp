@@ -10,6 +10,7 @@
 
 #include <tinyuc/unicode.h>
 
+#include "private/utf8_iter.h"
 #include "ucd_corpus.h"
 
 #include <doctest.h>
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -717,6 +719,200 @@ TEST_CASE("unicode - counts")
         CHECK(tinyuc_num_cp(buf, n) == 2);
         CHECK(tinyuc_num_char(buf, n) == 2);
         free(buf);
+    }
+}
+
+TEST_CASE("unicode - utf8 count agrees with the public API")
+{
+    // The scalar counting helper and the public counter (SIMD or scalar) must
+    // agree on valid input.
+    auto check = [](const char* str, size_t len) {
+        CHECK(tinyuc_utf8_count(str, len) == tinyuc_num_cp(str, len));
+    };
+
+    check("", 0);
+    check("a\0b", 3);
+
+    const char* mixed = "A\xC3\xA9\xF0\x9F\x98\x80"; // A, é, 😀
+    check(mixed, strlen(mixed));
+
+    // ASCII runs around the 8-byte window and non-ASCII boundaries.
+    for (size_t pad = 0; pad < 16; pad++)
+    {
+        std::string text(pad, 'z');
+        text += "\xE2\x82\xAC"; // €
+        text += "tail";
+        text += "\xF0\x9F\x98\x80"; // 😀
+        check(text.c_str(), text.size());
+    }
+
+    // The scalar helper reports a truncated trailing sequence using the same
+    // sentinel as the public API.
+    {
+        static const unsigned char trunc[] = {0x61, 0xE2, 0x82, 0x00};
+        CHECK(tinyuc_utf8_count((const char*)trunc, 3) == TINYUC_NPOS);
+    }
+
+    // Every corpus source form, so real multi-byte data is covered too.
+    std::vector<ucd_norm_case> tests;
+    REQUIRE(ucd_load_normalization_tests(NORM_TEST_FILE, tests));
+    for (const ucd_norm_case& test : tests)
+    {
+        for (const std::string* source :
+             {&test.input, &test.nfc, &test.nfd, &test.nfkc, &test.nfkd})
+        {
+            check(source->c_str(), source->size());
+        }
+    }
+}
+
+TEST_CASE("unicode - validate against a reference")
+{
+    // Independent strict UTF-8 validator used as the oracle.
+    auto ref_valid = [](const unsigned char* b, size_t n) {
+        size_t i = 0;
+        while (i < n)
+        {
+            unsigned c = b[i];
+            if (c < 0x80)
+            {
+                i++;
+            }
+            else if ((c & 0xE0u) == 0xC0u)
+            {
+                if (i + 1 >= n || (b[i + 1] & 0xC0u) != 0x80u)
+                    return false;
+                if ((((c & 0x1Fu) << 6) | (b[i + 1] & 0x3Fu)) < 0x80u)
+                    return false;
+                i += 2;
+            }
+            else if ((c & 0xF0u) == 0xE0u)
+            {
+                if (i + 2 >= n || (b[i + 1] & 0xC0u) != 0x80u || (b[i + 2] & 0xC0u) != 0x80u)
+                    return false;
+                unsigned cp = ((c & 0x0Fu) << 12) | ((b[i + 1] & 0x3Fu) << 6) | (b[i + 2] & 0x3Fu);
+                if (cp < 0x800u || (cp >= 0xD800u && cp <= 0xDFFFu))
+                    return false;
+                i += 3;
+            }
+            else if ((c & 0xF8u) == 0xF0u)
+            {
+                if (i + 3 >= n || (b[i + 1] & 0xC0u) != 0x80u || (b[i + 2] & 0xC0u) != 0x80u ||
+                    (b[i + 3] & 0xC0u) != 0x80u)
+                    return false;
+                unsigned cp = ((c & 0x07u) << 18) | ((b[i + 1] & 0x3Fu) << 12) |
+                              ((b[i + 2] & 0x3Fu) << 6) | (b[i + 3] & 0x3Fu);
+                if (cp < 0x10000u || cp > 0x10FFFFu)
+                    return false;
+                i += 4;
+            }
+            else
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto check_buffer = [&](const std::vector<unsigned char>& buf) {
+        const char* text = buf.empty() ? "" : reinterpret_cast<const char*>(buf.data());
+        const bool expected = ref_valid(buf.data(), buf.size());
+        const bool got = tinyuc_validate(text, buf.size(), nullptr) == TINYUC_OK;
+        CHECK(got == expected);
+        if (expected)
+        {
+            // For valid UTF-8 a codepoint has exactly one non-continuation byte.
+            size_t ref_count = 0;
+            for (unsigned char b : buf)
+                if ((b & 0xC0u) != 0x80u)
+                    ref_count++;
+            CHECK(tinyuc_num_cp(text, buf.size()) == ref_count);
+        }
+    };
+
+    // Structured edge cases padded past the SIMD threshold.
+    const std::vector<std::vector<unsigned char>> patterns = {
+        {0x41, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80}, // valid mixed
+        {0xE2, 0x82},                                     // truncated 3-byte
+        {0xF0, 0x9F, 0x98},                               // truncated 4-byte
+        {0xC0, 0xAF},                                     // overlong 2-byte
+        {0xE0, 0x80, 0xAF},                               // overlong 3-byte
+        {0xED, 0xA0, 0x80},                               // surrogate
+        {0xF4, 0x90, 0x80, 0x80},                         // above U+10FFFF
+        {0x80},                                           // stray continuation
+        {0xFE},                                           // invalid lead
+        {0x41, 0xC3},                                     // lead then ASCII
+    };
+    for (const auto& pattern : patterns)
+    {
+        std::vector<unsigned char> buf;
+        while (buf.size() < 96)
+            buf.insert(buf.end(), pattern.begin(), pattern.end());
+        check_buffer(buf);
+    }
+
+    // Randomized differential testing across the SIMD/scalar boundary.
+    std::mt19937 rng(0x5EEDu);
+    std::uniform_int_distribution<int> len_dist(0, 200);
+    std::uniform_int_distribution<int> byte_dist(0, 255);
+    std::uniform_int_distribution<int> mode_dist(0, 3);
+    for (int iter = 0; iter < 20000; iter++)
+    {
+        const int len = len_dist(rng);
+        std::vector<unsigned char> buf;
+        buf.reserve((size_t)len);
+        while ((int)buf.size() < len)
+        {
+            const int mode = mode_dist(rng);
+            if (mode == 0)
+            {
+                buf.push_back((unsigned char)byte_dist(rng)); // arbitrary byte
+            }
+            else if (mode == 1)
+            {
+                buf.push_back((unsigned char)(0x80u | (byte_dist(rng) & 0x3Fu))); // continuation
+            }
+            else
+            {
+                static const uint32_t cps[] = {0x41,
+                                               0x7F,
+                                               0x80,
+                                               0x7FF,
+                                               0x800,
+                                               0xD7FF,
+                                               0xE000,
+                                               0xFFFF,
+                                               0x10000,
+                                               0x10FFFF,
+                                               0x1F600};
+                uint32_t cp = cps[byte_dist(rng) % (sizeof(cps) / sizeof(cps[0]))];
+                if (mode == 3)
+                    cp = (uint32_t)byte_dist(rng) << 9; // broad range, may exceed U+10FFFF
+                if (cp < 0x80u)
+                {
+                    buf.push_back((unsigned char)cp);
+                }
+                else if (cp < 0x800u)
+                {
+                    buf.push_back((unsigned char)(0xC0u | (cp >> 6)));
+                    buf.push_back((unsigned char)(0x80u | (cp & 0x3Fu)));
+                }
+                else if (cp < 0x10000u)
+                {
+                    buf.push_back((unsigned char)(0xE0u | (cp >> 12)));
+                    buf.push_back((unsigned char)(0x80u | ((cp >> 6) & 0x3Fu)));
+                    buf.push_back((unsigned char)(0x80u | (cp & 0x3Fu)));
+                }
+                else if (cp <= 0x10FFFFu)
+                {
+                    buf.push_back((unsigned char)(0xF0u | (cp >> 18)));
+                    buf.push_back((unsigned char)(0x80u | ((cp >> 12) & 0x3Fu)));
+                    buf.push_back((unsigned char)(0x80u | ((cp >> 6) & 0x3Fu)));
+                    buf.push_back((unsigned char)(0x80u | (cp & 0x3Fu)));
+                }
+            }
+        }
+        check_buffer(buf);
     }
 }
 

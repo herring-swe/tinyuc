@@ -12,6 +12,8 @@
 
 #include "private/buffer.h"
 #include "private/helpers.h"
+#include "private/simd.h"
+#include "private/utf8_iter.h"
 #include "unicode_combine.h"
 #include "unicode_decomp.h"
 #include "unicode_defines.h"
@@ -115,69 +117,21 @@ static inline bool tinyucd_prop_extpict(const tinyucd_prop* prop)
 /*                                 Validation                                 */
 /* -------------------------------------------------------------------------- */
 
-static inline uint32_t tinyuc_fetch2(const unsigned char* bytes)
-{
-    return ((bytes[0] & 0x1Fu) << 6) //
-           | (bytes[1] & 0x3Fu);
-}
-
-static inline uint32_t tinyuc_fetch3(const unsigned char* bytes)
-{
-    return ((bytes[0] & 0x0Fu) << 12)  //
-           | ((bytes[1] & 0x3Fu) << 6) //
-           | (bytes[2] & 0x3Fu);       //
-}
-
-static inline uint32_t tinyuc_fetch4(const unsigned char* bytes)
-{
-    return ((bytes[0] & 0x07u) << 18)   //
-           | ((bytes[1] & 0x3Fu) << 12) //
-           | ((bytes[2] & 0x3Fu) << 6)  //
-           | (bytes[3] & 0x3Fu);        //
-}
-
 /**
  * @brief UTF-8 string iterator, only works on validated string
  * @param iter pointer to current position, will increment to next valid position
  * @return uint32_t, might be NULL
  */
-static uint32_t tinyuc_next_valid(const unsigned char** iter)
-{
-    const unsigned char* bytes = *iter;
-    uint32_t cp;
-    if (bytes[0] < 0x80u)
-    {
-        cp = bytes[0];
-        *iter = bytes + 1;
-    }
-    else if ((bytes[0] & 0xE0) == 0xC0u)
-    {
-        cp = tinyuc_fetch2(bytes);
-        *iter = bytes + 2;
-    }
-    else if ((bytes[0] & 0xF0) == 0xE0u)
-    {
-        cp = tinyuc_fetch3(bytes);
-        *iter = bytes + 3;
-    }
-    else // 4-byte sequence
-    {
-        cp = tinyuc_fetch4(bytes);
-        *iter = bytes + 4;
-    }
-    return cp;
-}
-
 uint32_t tinyuc_iter_utf8(const unsigned char** iter)
 {
-    return tinyuc_next_valid(iter);
+    return tinyuc_utf8_decode(iter);
 }
 
 /**
  * @brief Decode the next codepoint if it starts before @p last.
  *
- * Unlike @ref tinyuc_next_valid(), this never reads at or past @p last, so it
- * is safe for buffers that are not null-terminated.
+ * Unlike @ref tinyuc_iter_utf8(), this checks that @p *iter is before @p last
+ * before decoding, so callers cannot run past the end of the buffer.
  *
  * @param iter in/out pointer to the current position
  * @param last pointer one past the end of the buffer
@@ -188,7 +142,7 @@ static bool tinyuc_iter_next(const unsigned char** iter, const unsigned char* la
 {
     if (*iter >= last)
         return false;
-    *out = tinyuc_next_valid(iter);
+    *out = tinyuc_utf8_decode(iter);
     return true;
 }
 
@@ -200,21 +154,11 @@ static bool tinyuc_iter_next(const unsigned char** iter, const unsigned char* la
 // NOTE:
 // See implementation notes here:
 // https://unicode.org/mail-arch/unicode-ml/y2003-m02/att-0467/01-The_Algorithm_to_Valide_an_UTF-8_String
-enum tinyuc_result tinyuc_validate(const char* str, size_t len, char** errmsg)
+static bool tinyuc_validate_range(const unsigned char* bytes,
+                                  size_t len,
+                                  size_t* perrpos,
+                                  size_t* pexpected)
 {
-    if (!str)
-    {
-        return TINYUC_INVALID_ARGS;
-    }
-
-    if (len == TINYUC_NPOS)
-    {
-        len = strlen(str);
-    }
-
-    const unsigned char* bytes = (const unsigned char*)str;
-
-    bool success = false;
     size_t errpos = SIZE_MAX;
     size_t expected = 0;
 
@@ -242,7 +186,7 @@ enum tinyuc_result tinyuc_validate(const char* str, size_t len, char** errmsg)
                 errpos = i;
                 break;
             }
-            cp = tinyuc_fetch2(bytes + i);
+            cp = tinyuc_utf8_fetch2(bytes + i);
             if (cp < 0x80u) // Overlong
             {
                 errpos = i;
@@ -263,7 +207,7 @@ enum tinyuc_result tinyuc_validate(const char* str, size_t len, char** errmsg)
                 errpos = i;
                 break;
             }
-            cp = tinyuc_fetch3(bytes + i);
+            cp = tinyuc_utf8_fetch3(bytes + i);
             if (cp < 0x800u) // Overlong
             {
                 errpos = i;
@@ -290,7 +234,7 @@ enum tinyuc_result tinyuc_validate(const char* str, size_t len, char** errmsg)
                 errpos = i;
                 break;
             }
-            cp = tinyuc_fetch4(bytes + i);
+            cp = tinyuc_utf8_fetch4(bytes + i);
             if (cp < 0x10000u || cp > 0x10FFFFu) // Out of range
             {
                 errpos = i;
@@ -304,23 +248,94 @@ enum tinyuc_result tinyuc_validate(const char* str, size_t len, char** errmsg)
             break;
         }
     }
-    if (i == len)
+
+    *perrpos = errpos;
+    *pexpected = expected;
+    return i == len;
+}
+
+enum tinyuc_result tinyuc_validate(const char* str, size_t len, char** errmsg)
+{
+    if (!str)
     {
-        success = true;
+        return TINYUC_INVALID_ARGS;
     }
-    else if (errmsg)
+
+    if (len == TINYUC_NPOS)
     {
+        len = strlen(str);
+    }
+
+    const unsigned char* bytes = (const unsigned char*)str;
+
+    size_t errpos = SIZE_MAX;
+    size_t expected = 0;
+    size_t base = 0; // Offset of the scanned range within the whole string.
+    bool handled = false;
+    bool success = false;
+
+#if defined(TINYUC_SIMD_AVX2) || defined(TINYUC_SIMD_SSSE3)
+    const int simd_tier = tinyuc_simd_tier();
+
+// Try one SIMD tier: validate the bulk, then scalar-validate the tail from a
+// codepoint boundary. On an error in the bulk we leave `handled` false so the
+// scalar pass reports the exact position.
+#define TINYUC_TRY_SIMD_PREFIX(min_tier, prefix_fn, minlen)              \
+    do                                                                   \
+    {                                                                    \
+        if (!handled && simd_tier >= (min_tier) && len >= (minlen))      \
+        {                                                                \
+            size_t tinyuc_tail = 0;                                      \
+            if ((prefix_fn)(bytes, len, &tinyuc_tail))                   \
+            {                                                            \
+                handled = true;                                          \
+                if (tinyuc_tail >= len)                                  \
+                {                                                        \
+                    success = true;                                      \
+                }                                                        \
+                else                                                     \
+                {                                                        \
+                    success = tinyuc_validate_range(bytes + tinyuc_tail, \
+                                                    len - tinyuc_tail,   \
+                                                    &errpos,             \
+                                                    &expected);          \
+                    base = tinyuc_tail;                                  \
+                }                                                        \
+            }                                                            \
+        }                                                                \
+    } while (0)
+#endif
+
+#if defined(TINYUC_SIMD_AVX2)
+    TINYUC_TRY_SIMD_PREFIX(TINYUC_SIMD_TIER_AVX2, tinyuc_utf8_avx2_prefix, 64);
+#endif
+#if defined(TINYUC_SIMD_SSSE3)
+    TINYUC_TRY_SIMD_PREFIX(TINYUC_SIMD_TIER_SSSE3, tinyuc_utf8_ssse3_prefix, 48);
+#endif
+
+#if defined(TINYUC_SIMD_AVX2) || defined(TINYUC_SIMD_SSSE3)
+#undef TINYUC_TRY_SIMD_PREFIX
+#endif
+
+    if (!handled)
+    {
+        success = tinyuc_validate_range(bytes, len, &errpos, &expected);
+    }
+
+    if (!success && errmsg)
+    {
+        const size_t abs_pos = errpos + base;
         if (expected)
         {
             tinyuc_asprintf(errmsg,
                             "Truncated UTF-8 sequence at position %zu: expected %zu bytes, got %zu",
-                            errpos,
+                            abs_pos,
                             expected,
-                            len - errpos);
+                            len - abs_pos);
         }
         else
         {
-            tinyuc_asprintf(errmsg, "Invalid UTF-8 sequence at position %zu", errpos);
+            tinyuc_asprintf(errmsg, "Invalid UTF-8 sequence at position %zu", abs_pos);
         }
     }
     return success ? TINYUC_OK : TINYUC_INVALID_UTF8;
@@ -524,21 +539,25 @@ static enum tinyuc_result tinyuc_encode_codepoints(tinyuc_buffer* buf,
 
 size_t tinyuc_num_cp(const char* str, size_t len)
 {
-    size_t num = 0;
-    if (str)
-    {
-        if (len == TINYUC_NPOS)
-            len = strlen(str);
+    if (!str)
+        return 0;
 
-        uint32_t cp;
-        FOR_EACH_CODEPOINT(cp, str, len)
-        {
-            TINYUC_UNUSED(cp);
-            num++;
-        }
-        FOR_EACH_CODEPOINT_CHECK_RET(TINYUC_NPOS);
-    }
-    return num;
+    if (len == TINYUC_NPOS)
+        len = strlen(str);
+
+#if defined(TINYUC_SIMD_AVX2) || defined(TINYUC_SIMD_SSSE3)
+    const int simd_tier = tinyuc_simd_tier();
+#endif
+#if defined(TINYUC_SIMD_AVX2)
+    if (simd_tier >= TINYUC_SIMD_TIER_AVX2)
+        return tinyuc_utf8_count_avx2(str, len);
+#endif
+#if defined(TINYUC_SIMD_SSSE3)
+    if (simd_tier >= TINYUC_SIMD_TIER_SSSE3)
+        return tinyuc_utf8_count_ssse3(str, len);
+#endif
+
+    return tinyuc_utf8_count(str, len);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -656,7 +675,7 @@ static const unsigned char* tinyuc_prev_start(const unsigned char* base, const u
 static const tinyucd_prop* tinyucd_prop_at(const unsigned char* start, const unsigned char** end)
 {
     const unsigned char* iter = start;
-    uint32_t cp = tinyuc_next_valid(&iter);
+    uint32_t cp = tinyuc_utf8_decode(&iter);
     if (end)
         *end = iter;
     return tinyuc_get_prop(cp);
@@ -1708,7 +1727,7 @@ static bool tinyuc_fold_iter_next(tinyuc_fold_iter* iter, uint32_t* out)
     if (iter->pos >= iter->end)
         return false;
 
-    iter->ctx.buf[0] = tinyuc_next_valid(&iter->pos);
+    iter->ctx.buf[0] = tinyuc_utf8_decode(&iter->pos);
 
     if (tinyuc_case_map_cp(&iter->ctx, NULL) != TINYUC_OK)
         return false;
