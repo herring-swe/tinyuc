@@ -1411,56 +1411,58 @@ static size_t norm_compose(uint32_t* cps, size_t count)
     if (count < 2)
         return count; // Nothing to compose
 
-    const tinyucd_prop* prop;
-    const tinyucd_prop* prev_prop;
-    const tinyucd_combiners* combiners = NULL;
-    // size_t last_starter_idx             = 0; // Only valid if combiners != NULL
-    for (size_t i = 1; i < count; i++)
+    // Compact as we go. Writing forward instead of deleting each composed
+    // codepoint with memmove() keeps this pass linear even for long text with
+    // many compositions.
+    size_t write = 0;
+    for (size_t read = 0; read < count; read++)
     {
-        if (is_leading_jamo(cps[i - 1]) && is_vowel_jamo(cps[i]))
-        {
-            uint32_t T = (i + 1 < count) ? cps[i + 1] : 0;
-            if (!is_trailing_jamo(T))
-                T = 0;
+        const uint32_t cp = cps[read];
 
-            cps[i - 1] = compose_hangul(cps[i - 1], cps[i], T);
-            // Remove 1 or 2 codepoints and shift the rest
-            size_t shift = (T != 0) ? 2 : 1;
-            memmove(&cps[i], &cps[i + shift], (count - i - shift) * sizeof(uint32_t));
-            count -= shift;
-            i--; // recheck same index
+        if (write > 0 && is_leading_jamo(cps[write - 1]) && is_vowel_jamo(cp))
+        {
+            uint32_t T = 0;
+            if (read + 1 < count && is_trailing_jamo(cps[read + 1]))
+            {
+                T = cps[read + 1];
+                read++;
+            }
+
+            cps[write - 1] = compose_hangul(cps[write - 1], cp, T);
             continue;
         }
 
-        // Seek back left to find last starting character
-        // int due to possible overflow
-        prop = tinyuc_get_prop(cps[i]);
-        for (int j = (int)i - 1; j >= 0; j--)
+        const tinyucd_prop* prop = tinyuc_get_prop(cp);
+        const uint8_t ccc_i = prop ? prop->ccc : 0;
+        bool composed = false;
+
+        // Seek back left to find the last starter and try to compose.
+        for (size_t j = write; j > 0; j--)
         {
-            prev_prop = tinyuc_get_prop(cps[j]);
-            combiners = prev_prop ? tinyuc_get_combiners(prev_prop) : NULL;
-            uint32_t composed = 0;
-            if (combiners)
-                composed = norm_compose_cp(cps[j], cps[i], combiners);
-            if (composed != 0)
+            const size_t index = j - 1;
+            const tinyucd_prop* prev_prop = tinyuc_get_prop(cps[index]);
+            const tinyucd_combiners* combiners = prev_prop ? tinyuc_get_combiners(prev_prop) : NULL;
+            const uint32_t combined = combiners ? norm_compose_cp(cps[index], cp, combiners) : 0;
+
+            if (combined != 0)
             {
-                cps[j] = composed;
-                // Remove current combiner and shift the rest
-                memmove(&cps[i], &cps[i + 1], (count - i - 1) * sizeof(uint32_t));
-                count--;
-                i--; // recheck same index
+                cps[index] = combined;
+                composed = true;
                 break;
             }
 
-            // If we can't compose with current j, we must check
-            // That it doesn't block the composition chain
-            uint8_t ccc_i = prop ? prop->ccc : 0;
-            uint8_t ccc_j = prev_prop ? prev_prop->ccc : 0;
+            // If we can't compose with this codepoint, stop when the
+            // composition chain is blocked by a starter or a higher CCC.
+            const uint8_t ccc_j = prev_prop ? prev_prop->ccc : 0;
             if (ccc_j == 0 || ccc_j >= ccc_i)
                 break;
         }
+
+        if (!composed)
+            cps[write++] = cp;
     }
-    return count;
+
+    return write;
 }
 
 static enum tinyuc_result normalize(norm_ctx_t* ctx,
@@ -1472,8 +1474,52 @@ static enum tinyuc_result normalize(norm_ctx_t* ctx,
     enum tinyuc_result ret = TINYUC_OK;
     uint32_t cp;
 
-    FOR_EACH_CODEPOINT(cp, str, size)
+    const unsigned char* iter = (const unsigned char*)str;
+    const unsigned char* last = iter + size;
+    const bool compose = (ctx->flags & UC_FLAGS_COMPOSE) != 0;
+
+    while (iter < last)
     {
+        if (!compose)
+        {
+            // Fast path: copy untouched ASCII runs directly to the output.
+            if (*iter < 0x80)
+            {
+                const unsigned char* run = iter;
+                while (iter < last && *iter < 0x80)
+                    ++iter;
+
+                if (ctx->len > 0 && (ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
+                    return ret;
+                if (!tinyuc_buffer_push(&ctx->cp, run, (size_t)(iter - run)))
+                    return TINYUC_OUT_OF_MEMORY;
+                continue;
+            }
+
+            const unsigned char* cp_start = iter;
+            if (!tinyuc_iter_next(&iter, last, &cp))
+                break;
+
+            // Fast path: copy codepoints that are already unchanged in this form.
+            const tinyucd_prop* prop = tinyuc_get_prop(cp);
+            const tinyucd_decomp* decomp = tinyuc_get_decomp(prop);
+            const bool needs_decomp =
+                must_decomp && decomp &&
+                (decomp->type == TINYUCD_DC_CANON || (ctx->flags & UC_FLAGS_COMPAT));
+            if (!is_hangul_syllable(cp) && (!prop || prop->ccc == 0) && !needs_decomp)
+            {
+                if (ctx->len > 0 && (ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
+                    return ret;
+                if (!tinyuc_buffer_push(&ctx->cp, cp_start, (size_t)(iter - cp_start)))
+                    return TINYUC_OUT_OF_MEMORY;
+                continue;
+            }
+        }
+        else if (!tinyuc_iter_next(&iter, last, &cp))
+        {
+            break;
+        }
+
         if (is_hangul_syllable(cp))
         {
             if ((ret = norm_decompose_hangul(ctx, cp, errmsg)) != TINYUC_OK)
@@ -1645,11 +1691,22 @@ static enum tinyuc_result normalize_common(const char* str,
         return ret;
     }
 
-    // Find out how many codepoints we deal with for the worst case allocation
-    size_t numcp = tinyuc_num_cp(str, len);
+    // Start from a realistic output size instead of counting codepoints and
+    // allocating for the worst-case decomposition. The buffer grows on demand.
+    if (len > SIZE_MAX - len / 4 - 32)
+        return TINYUC_OUT_OF_MEMORY;
 
-    // Allocate for the worst case decomposition of the input
-    if (!tinyuc_buffer_init(&ctx.cp, 4 * numcp * sizeof(uint32_t) + 1))
+    size_t initial_capacity = len + len / 4 + 32;
+
+    // Composed forms stage codepoints, not UTF-8 bytes, in this buffer.
+    if (ctx.flags & UC_FLAGS_COMPOSE)
+    {
+        if (initial_capacity > SIZE_MAX / sizeof(uint32_t))
+            return TINYUC_OUT_OF_MEMORY;
+        initial_capacity *= sizeof(uint32_t);
+    }
+
+    if (!tinyuc_buffer_init(&ctx.cp, initial_capacity))
     {
         return TINYUC_OUT_OF_MEMORY;
     }

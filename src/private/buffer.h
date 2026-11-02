@@ -29,7 +29,7 @@ static inline bool tinyuc_buffer_init(tinyuc_buffer* buf, size_t initial_capacit
 
     memset(buf, 0, sizeof(tinyuc_buffer));
 
-    buf->data = (char*)calloc(1, initial_capacity);
+    buf->data = (char*)malloc(initial_capacity);
     if (!buf->data)
         return false;
 
