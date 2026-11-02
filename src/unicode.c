@@ -54,7 +54,7 @@
 /*                               Property lookup                              */
 /* -------------------------------------------------------------------------- */
 
-static const tinyucd_prop* tinyuc_get_prop(uint32_t cp)
+static TINYUC_FORCE_INLINE const tinyucd_prop* tinyuc_get_prop(uint32_t cp)
 {
     assert(cp <= 0x110000);
     unsigned int offset = s_tinyucd_stage1_table[cp / TINYUCD_BLOCK_SIZE] * TINYUCD_BLOCK_SIZE;
@@ -73,7 +73,7 @@ static const tinyucd_mapping* tinyuc_get_mapping(const tinyucd_prop* prop)
     return NULL;
 }
 
-static const tinyucd_decomp* tinyuc_get_decomp(const tinyucd_prop* prop)
+static TINYUC_FORCE_INLINE const tinyucd_decomp* tinyuc_get_decomp(const tinyucd_prop* prop)
 {
     if (prop && prop->decomp_idx)
     {
@@ -83,7 +83,7 @@ static const tinyucd_decomp* tinyuc_get_decomp(const tinyucd_prop* prop)
     return NULL;
 }
 
-static const tinyucd_combiners* tinyuc_get_combiners(const tinyucd_prop* prop)
+static TINYUC_FORCE_INLINE const tinyucd_combiners* tinyuc_get_combiners(const tinyucd_prop* prop)
 {
     if (prop && prop->combiner_idx)
     {
@@ -138,7 +138,9 @@ uint32_t tinyuc_iter_utf8(const unsigned char** iter)
  * @param out receives the decoded codepoint
  * @return true if a codepoint was decoded, false if @p *iter reached @p last
  */
-static bool tinyuc_iter_next(const unsigned char** iter, const unsigned char* last, uint32_t* out)
+static TINYUC_FORCE_INLINE bool tinyuc_iter_next(const unsigned char** iter,
+                                                 const unsigned char* last,
+                                                 uint32_t* out)
 {
     if (*iter >= last)
         return false;
@@ -501,12 +503,20 @@ static enum tinyuc_result tinyuc_encode_codepoints(tinyuc_buffer* buf,
                                                    size_t len,
                                                    char** errmsg)
 {
-    // Minimum chunks to work with
-    uint8_t bytes[5 * TINYUCD_MAX_MULTI_LEN];
-    size_t bytes_len = 0;
+    if (len > SIZE_MAX / 4)
+        return TINYUC_OUT_OF_MEMORY;
+
+    // Reserve the worst-case UTF-8 size once and write directly into the
+    // destination. This avoids the temporary stack buffer and one copy per
+    // chunk in the normalization hot path.
+    if (!tinyuc_buffer_ensure(buf, len * 4))
+        return TINYUC_OUT_OF_MEMORY;
+
+    uint8_t* out = (uint8_t*)buf->data + buf->size;
+    size_t written = 0;
     for (size_t i = 0; i < len; i++)
     {
-        int res = tinyuc_encode_codepoint(bytes + bytes_len, codepoints[i]);
+        int res = tinyuc_encode_codepoint(out + written, codepoints[i]);
         if (res < 0)
         {
             if (errmsg)
@@ -515,21 +525,10 @@ static enum tinyuc_result tinyuc_encode_codepoints(tinyuc_buffer* buf,
             }
             return TINYUC_INVALID_CODEPOINT;
         }
-        bytes_len += (size_t)res;
+        written += (size_t)res;
+    }
 
-        // Push to buffer if next pass might overflow
-        if (bytes_len >= (size_t)(4 * TINYUCD_MAX_MULTI_LEN))
-        {
-            if (!tinyuc_buffer_push(buf, bytes, bytes_len))
-                return TINYUC_OUT_OF_MEMORY;
-            bytes_len = 0;
-        }
-    }
-    // Push remaining bytes
-    if (bytes_len > 0 && !tinyuc_buffer_push(buf, bytes, bytes_len))
-    {
-        return TINYUC_OUT_OF_MEMORY;
-    }
+    buf->size += written;
     return TINYUC_OK;
 }
 
@@ -1235,10 +1234,10 @@ static enum tinyuc_result norm_ctx_grow_slow(norm_ctx_t* ctx, size_t needed, cha
     return TINYUC_OK;
 }
 
-static inline enum tinyuc_result norm_ctx_add(norm_ctx_t* ctx,
-                                              uint32_t cp,
-                                              uint8_t ccc,
-                                              char** errmsg)
+static TINYUC_FORCE_INLINE enum tinyuc_result norm_ctx_add(norm_ctx_t* ctx,
+                                                           uint32_t cp,
+                                                           uint8_t ccc,
+                                                           char** errmsg)
 {
     enum tinyuc_result ret = TINYUC_OK;
     if (ctx->len >= ctx->cap && (ret = norm_ctx_grow_slow(ctx, ctx->len + 1, errmsg)) != TINYUC_OK)
@@ -1266,24 +1265,19 @@ static inline enum tinyuc_result norm_ctx_add(norm_ctx_t* ctx,
     return ret;
 }
 
+static size_t norm_compose(uint32_t* cps, uint8_t* ccc, size_t count);
+
 static enum tinyuc_result norm_ctx_flush(norm_ctx_t* ctx, char** errmsg)
 {
     enum tinyuc_result ret = TINYUC_OK;
     if (ctx->len > 0)
     {
+        size_t count = ctx->len;
         if (ctx->flags & UC_FLAGS_COMPOSE)
-        {
-            // Flush as codepoints
-            if (!tinyuc_buffer_push(&ctx->cp, ctx->cp_buf, ctx->len * sizeof(uint32_t)))
-            {
-                return TINYUC_OUT_OF_MEMORY;
-            }
-        }
-        else
-        {
-            // Flush as UTF-8
-            ret = tinyuc_encode_codepoints(&ctx->cp, ctx->cp_buf, ctx->len, errmsg);
-        }
+            count = norm_compose(ctx->cp_buf, ctx->ccc_buf, count);
+
+        // Flush as UTF-8
+        ret = tinyuc_encode_codepoints(&ctx->cp, ctx->cp_buf, count, errmsg);
     }
     ctx->len = 0;
     return ret;
@@ -1359,7 +1353,12 @@ static enum tinyuc_result norm_decompose_cp(norm_ctx_t* ctx,
 #endif
     if (!decomp || !(decomp->type == TINYUCD_DC_CANON || ctx->flags & UC_FLAGS_COMPAT))
     {
-        if (ccc == 0 && (ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
+        // Composed forms keep the full codepoint stream and compose it at the
+        // end. Canonical composition can cross what looks like a starter
+        // boundary (for example Sinhala and Hangul), so flushing per starter
+        // here is not safe.
+        if (!(ctx->flags & UC_FLAGS_COMPOSE) && ccc == 0 &&
+            (ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
             return ret;
         // No decomposition or wrong type: append as-is
         return norm_ctx_add(ctx, cp, ccc, errmsg);
@@ -1375,9 +1374,9 @@ static enum tinyuc_result norm_decompose_cp(norm_ctx_t* ctx,
     return ret;
 }
 
-static uint32_t norm_compose_cp(uint32_t starter,
-                                uint32_t combiner,
-                                const tinyucd_combiners* combiners)
+static TINYUC_FORCE_INLINE uint32_t norm_compose_cp(uint32_t starter,
+                                                    uint32_t combiner,
+                                                    const tinyucd_combiners* combiners)
 {
     if (!combiners)
         return 0;
@@ -1406,14 +1405,15 @@ static uint32_t norm_compose_cp(uint32_t starter,
     return 0; // Not found
 }
 
-static size_t norm_compose(uint32_t* cps, size_t count)
+static size_t norm_compose(uint32_t* cps, uint8_t* ccc, size_t count)
 {
     if (count < 2)
         return count; // Nothing to compose
 
     // Compact as we go. Writing forward instead of deleting each composed
     // codepoint with memmove() keeps this pass linear even for long text with
-    // many compositions.
+    // many compositions. The parallel ccc array avoids repeated property
+    // lookups while scanning backwards.
     size_t write = 0;
     for (size_t read = 0; read < count; read++)
     {
@@ -1429,37 +1429,47 @@ static size_t norm_compose(uint32_t* cps, size_t count)
             }
 
             cps[write - 1] = compose_hangul(cps[write - 1], cp, T);
+            ccc[write - 1] = 0;
             continue;
         }
 
-        const tinyucd_prop* prop = tinyuc_get_prop(cp);
-        const uint8_t ccc_i = prop ? prop->ccc : 0;
+        const uint8_t ccc_i = ccc[read];
         bool composed = false;
 
         // Seek back left to find the last starter and try to compose.
         for (size_t j = write; j > 0; j--)
         {
             const size_t index = j - 1;
-            const tinyucd_prop* prev_prop = tinyuc_get_prop(cps[index]);
-            const tinyucd_combiners* combiners = prev_prop ? tinyuc_get_combiners(prev_prop) : NULL;
-            const uint32_t combined = combiners ? norm_compose_cp(cps[index], cp, combiners) : 0;
+            const uint8_t ccc_j = ccc[index];
 
-            if (combined != 0)
+            if (ccc_j == 0)
             {
-                cps[index] = combined;
-                composed = true;
-                break;
+                const tinyucd_prop* prev_prop = tinyuc_get_prop(cps[index]);
+                const tinyucd_combiners* combiners =
+                    prev_prop ? tinyuc_get_combiners(prev_prop) : NULL;
+                const uint32_t combined =
+                    combiners ? norm_compose_cp(cps[index], cp, combiners) : 0;
+
+                if (combined != 0)
+                {
+                    cps[index] = combined;
+                    composed = true;
+                }
+                break; // Reached the starter
             }
 
             // If we can't compose with this codepoint, stop when the
-            // composition chain is blocked by a starter or a higher CCC.
-            const uint8_t ccc_j = prev_prop ? prev_prop->ccc : 0;
-            if (ccc_j == 0 || ccc_j >= ccc_i)
+            // composition chain is blocked by a higher CCC.
+            if (ccc_j >= ccc_i)
                 break;
         }
 
         if (!composed)
-            cps[write++] = cp;
+        {
+            cps[write] = cp;
+            ccc[write] = ccc_i;
+            write++;
+        }
     }
 
     return write;
@@ -1524,16 +1534,22 @@ static enum tinyuc_result normalize(norm_ctx_t* ctx,
         {
             if ((ret = norm_decompose_hangul(ctx, cp, errmsg)) != TINYUC_OK)
                 return ret;
-            if ((ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
-                return ret;
+
+            if (!compose)
+            {
+                if ((ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
+                    return ret;
+            }
         }
         else
         {
             if ((ret = norm_decompose_cp(ctx, cp, must_decomp, errmsg)) != TINYUC_OK)
                 return ret;
 
-            // Only flush if last is a starter
-            if (ctx->len > 0 && ctx->ccc_buf[ctx->len - 1] == 0)
+            // Only non-compose encoding needs an eager flush here. In compose
+            // mode the window must survive until the next starter so marks can
+            // compose with it.
+            if (!compose && ctx->len > 0 && ctx->ccc_buf[ctx->len - 1] == 0)
             {
                 if ((ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
                     return ret;
@@ -1542,18 +1558,6 @@ static enum tinyuc_result normalize(norm_ctx_t* ctx,
     }
     if ((ret = norm_ctx_flush(ctx, errmsg)) != TINYUC_OK)
         return ret;
-
-    if (ctx->flags & UC_FLAGS_COMPOSE)
-    {
-        uint32_t* cps = (uint32_t*)ctx->cp.data;
-        size_t count = ctx->cp.size / sizeof(uint32_t);
-
-        count = norm_compose(cps, count);
-
-        tinyuc_buffer_clear(&ctx->cp);
-        if ((ret = tinyuc_encode_codepoints(&ctx->cp, cps, count, errmsg)) != TINYUC_OK)
-            return ret;
-    }
 
     return tinyuc_buffer_push(&ctx->cp, "\0", 1) ? TINYUC_OK : TINYUC_OUT_OF_MEMORY;
 }
@@ -1697,14 +1701,6 @@ static enum tinyuc_result normalize_common(const char* str,
         return TINYUC_OUT_OF_MEMORY;
 
     size_t initial_capacity = len + len / 4 + 32;
-
-    // Composed forms stage codepoints, not UTF-8 bytes, in this buffer.
-    if (ctx.flags & UC_FLAGS_COMPOSE)
-    {
-        if (initial_capacity > SIZE_MAX / sizeof(uint32_t))
-            return TINYUC_OUT_OF_MEMORY;
-        initial_capacity *= sizeof(uint32_t);
-    }
 
     if (!tinyuc_buffer_init(&ctx.cp, initial_capacity))
     {

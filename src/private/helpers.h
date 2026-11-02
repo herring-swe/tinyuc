@@ -14,6 +14,14 @@
 
 #define TINYUC_UNUSED(var) ((void)(var))
 
+#if defined(_MSC_VER)
+#define TINYUC_FORCE_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define TINYUC_FORCE_INLINE __attribute__((always_inline)) inline
+#else
+#define TINYUC_FORCE_INLINE inline
+#endif
+
 #ifdef NDEBUG
 #define TINYUC_ASSERT(expr, msg)
 #else
