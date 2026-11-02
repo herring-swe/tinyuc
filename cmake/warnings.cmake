@@ -54,7 +54,7 @@ function(tinyuc_target_set_warnings name)
                 )
             endif()
 
-            # And more silly warnings with C++ (doctest)
+            # And more silly warnings with C++ (Catch2)
             target_compile_options(${name} PRIVATE
                 $<$<COMPILE_LANGUAGE:CXX>:
                 -Wno-unsafe-buffer-usage

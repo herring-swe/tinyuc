@@ -47,7 +47,7 @@ IncludeCategories:
     SortPriority:    1
     CaseSensitive:   true
   # Thirdparty inclusion
-  - Regex:           '^((<|")(doctest))'
+  - Regex:           '^((<|")(catch2|utf8proc|unicode))'
     Priority:        3
   # Windows headers before Windows.h
   - Regex:           '<winsock2.h>'

@@ -53,4 +53,17 @@ std::string ucd_hex_to_utf8(const char* hex);
  */
 bool ucd_load_normalization_tests(const char* path, std::vector<ucd_norm_case>& tests);
 
+/**
+ * @brief Load the UCD GraphemeBreakTest corpus as one UTF-8 buffer.
+ *
+ * Test cases are separated by a newline, which forces a cluster boundary and
+ * prevents adjacent cases from merging. Comment and part header lines are
+ * ignored.
+ *
+ * @param path path to GraphemeBreakTest.txt
+ * @param buffer receives the decoded corpus; cleared first
+ * @return false if the file could not be opened
+ */
+bool ucd_load_grapheme_buffer(const char* path, std::string& buffer);
+
 #endif // TINYUC_TESTS_UCD_CORPUS_H

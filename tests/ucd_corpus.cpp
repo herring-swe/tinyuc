@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <sstream>
 
 namespace {
 
@@ -123,5 +124,60 @@ bool ucd_load_normalization_tests(const char* path, std::vector<ucd_norm_case>& 
 
         tests.push_back(std::move(data));
     }
+    return true;
+}
+
+bool ucd_load_grapheme_buffer(const char* path, std::string& buffer)
+{
+    buffer.clear();
+
+    std::ifstream stream(path, std::ios::in);
+    if (!stream.is_open())
+        return false;
+
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        const std::size_t comment = line.find('#');
+        if (comment != std::string::npos)
+            line.erase(comment);
+
+        std::istringstream tokens(line);
+        std::string token;
+        std::string test_case;
+
+        while (tokens >> token)
+        {
+            if (token == "\xC3\xB7" || token == "\xC3\x97")
+                continue; // ÷ and × boundary markers
+
+            std::size_t consumed = 0;
+            std::uint32_t codepoint = 0;
+            try
+            {
+                codepoint = static_cast<std::uint32_t>(std::stoul(token, &consumed, 16));
+            }
+            catch (const std::exception&)
+            {
+                continue;
+            }
+
+            if (consumed != token.size())
+                continue;
+
+            char encoded[4];
+            const int written =
+                tinyuc_encode_codepoint(reinterpret_cast<uint8_t*>(encoded), codepoint);
+            if (written > 0)
+                test_case.append(encoded, static_cast<std::size_t>(written));
+        }
+
+        if (!test_case.empty())
+        {
+            buffer += test_case;
+            buffer += '\n';
+        }
+    }
+
     return true;
 }

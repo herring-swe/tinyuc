@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterable, List, Sequence
 
 C_SUFFIXES = {".c", ".cpp", ".h", ".hpp"}
-C_DIRS = sorted(["src", "include", "tests", "samples", "!tests/doctest"])
+C_DIRS = sorted(["src", "include", "tests"])
 
 PYTHON_SUFFIXES = {".py"}
 PYTHON_DIRS = sorted(["tools"])
@@ -77,9 +77,7 @@ def find_project_root() -> Path:
     sys.exit(1)
 
 
-def _resolve_paths(
-    root_dir: Path, raw_entries: Sequence[str], label: str
-) -> List[Path]:
+def _resolve_paths(root_dir: Path, raw_entries: Sequence[str], label: str) -> List[Path]:
     resolved: List[Path] = []
     for entry in raw_entries:
         path = Path(entry)
@@ -94,9 +92,7 @@ def _resolve_paths(
     return resolved
 
 
-def _resolve_dir_rules(
-    root_dir: Path, dirs: Sequence[str]
-) -> tuple[List[Path], List[Path]]:
+def _resolve_dir_rules(root_dir: Path, dirs: Sequence[str]) -> tuple[List[Path], List[Path]]:
     include_entries: List[str] = []
     exclude_entries: List[str] = []
 
@@ -146,9 +142,7 @@ def _discover_files_with_git(
         if not rel:
             continue
         path = root_dir / rel
-        if any(
-            path == exclude or exclude in path.parents for exclude in resolved_excludes
-        ):
+        if any(path == exclude or exclude in path.parents for exclude in resolved_excludes):
             continue
         if path.suffix.lower() in valid_suffixes:
             files.append(path)
@@ -216,9 +210,7 @@ def run_format_python(root_dir: Path, fix: bool) -> bool:
     mypy_cmd = [sys.executable, "-m", "mypy", *targets]
 
     print("\nRunning ruff...")
-    ruff_result = subprocess.run(
-        ruff_cmd, check=False, cwd=root_dir, capture_output=True
-    )
+    ruff_result = subprocess.run(ruff_cmd, check=False, cwd=root_dir, capture_output=True)
     if ruff_result.stdout:
         print(ruff_result.stdout.decode("utf-8", errors="replace"))
     if ruff_result.stderr:
@@ -228,9 +220,7 @@ def run_format_python(root_dir: Path, fix: bool) -> bool:
         print("ruff check failed")
 
     print("\nRunning mypy...")
-    mypy_result = subprocess.run(
-        mypy_cmd, check=False, cwd=root_dir, capture_output=True
-    )
+    mypy_result = subprocess.run(mypy_cmd, check=False, cwd=root_dir, capture_output=True)
     if mypy_result.stdout:
         print(mypy_result.stdout.decode("utf-8", errors="replace"))
     if mypy_result.stderr:
@@ -251,9 +241,7 @@ def discover_files_by_type(
     if format_type in (FormatType.ALL, FormatType.C):
         c_dirs, c_excludes = _resolve_dir_rules(root_dir, C_DIRS)
         if c_dirs:
-            c_files = discover_files(
-                root_dir, c_dirs, C_SUFFIXES, exclude_dirs=c_excludes
-            )
+            c_files = discover_files(root_dir, c_dirs, C_SUFFIXES, exclude_dirs=c_excludes)
 
     if format_type in (FormatType.ALL, FormatType.PYTHON):
         python_dirs, python_excludes = _resolve_dir_rules(root_dir, PYTHON_DIRS)
@@ -347,9 +335,7 @@ def main() -> int:
     mode_group.add_argument(
         "--list", action="store_true", help="List files that would be formatted"
     )
-    mode_group.add_argument(
-        "--fix", action="store_true", help="Apply formatting in-place"
-    )
+    mode_group.add_argument("--fix", action="store_true", help="Apply formatting in-place")
     parser.add_argument(
         "--type",
         default=FormatType.ALL.value,

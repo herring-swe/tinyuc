@@ -60,7 +60,7 @@ class TinyucConan(ConanFile):
     def build_requirements(self):
         self.tool_requires("cmake/[^3.28]")
         self.tool_requires("ninja/[^1.13]")
-        self.test_requires("doctest/[^2.4.12]")
+        self.test_requires("catch2/3.16.1")
 
     def source(self):
         git = Git(self)

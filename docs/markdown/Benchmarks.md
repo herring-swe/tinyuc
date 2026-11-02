@@ -2,8 +2,57 @@
 
 ## Unicode Normalization
 
-The normalization suite uses the [Unicode Normalization Test Suite 17.0.0](https://www.unicode.org/Public/17.0.0/ucd/NormalizationTest.txt) from UCD.
+The normalization benchmark uses the [Unicode Normalization Test Suite 17.0.0](https://www.unicode.org/Public/17.0.0/ucd/NormalizationTest.txt) from UCD. Benchmarks are built with Catch2 and selected with tags, for example `tinyuc_benchmarks "[normalization]"`.
 Differences between Unicode versions have not been considered but should be negligible.
+
+`tinyuc_benchmarks` measures the TinyUC implementations only. The separate
+`tinyuc_compare` binary runs the same workloads against utf8proc and ICU and
+prints their versions, build information, library locations, and sizes together
+with the measurements. It is enabled with `-DTINYUC_BENCH_COMPARE=ON`:
+
+```bash
+cmake -S . -B build -DTINYUC_BENCH_COMPARE=ON
+cmake --build build --target tinyuc_compare
+./build/bin/tinyuc_compare "[compare]"
+```
+
+The comparison libraries are used from `find_package` when available. Otherwise
+pinned releases are downloaded: utf8proc 2.12.0 is built from source and the
+official ICU 79.1 prebuilt is used on supported Windows and Linux x64 platforms.
+The Windows in-box ICU is intentionally not used, because it is an older,
+stripped-down variant that is not comparable to a regular ICU installation;
+`TINYUC_COMPARE_ICU_MIN_VERSION` defaults to 74.0.
+
+Set `-DTINYUC_COMPARE_DOWNLOAD=OFF` to use only packages found by
+`find_package` and never download the comparison libraries.
+
+The comparison binary currently covers normalization, case folding, and grapheme
+cluster counting. The grapheme benchmark uses the official UCD
+`GraphemeBreakTest.txt` corpus. ICU performs the work on UTF-16, so it is
+reported twice: `icu-utf8` includes the UTF-8 to UTF-16 conversion and
+`icu-utf16` runs on a pre-converted corpus. `tinyuc_benchmarks` also has a
+`[grapheme]` suite with `count` and `iterate` variants.
+
+`tinyuc_compare` additionally extracts `data/benchmark.zip` and runs
+normalization, casefold, grapheme, validation, and codepoint-count suites for
+each language file (German, Japanese, Korean, and Vietnamese). These are UTF-8
+text files with LF line endings, so the suites report results such as
+`normalization - german`, `validate - german`, and `count - japanese`.
+
+Markdown output, trimming, sample settings, and version/build reporting behave
+the same as in `tinyuc_benchmarks`.
+
+`tinyuc_benchmarks` and `tinyuc_compare` use a TinyUC Catch2 reporter that
+prints the compact table format used by the previous benchmark runner. It
+supports:
+
+* `--trim <percent>` — discard this percentage of samples from each tail before
+  computing mean and standard deviation (default 5).
+* `--markdown <file>` — also write the results as markdown tables.
+* `--reporter <name>` — use any other Catch2 reporter instead.
+
+The Catch2 benchmark options still apply, for example
+`--benchmark-samples <count>` and `--benchmark-warmup-time <ms>`.
 
 We iterate the 20,034 cases for each of the source columns (source, NFC, NFD, NFKC, NFKD) and apply each normalization form.
 In total 400,680 conversions per benchmark call.
@@ -11,17 +60,22 @@ In total 400,680 conversions per benchmark call.
 Versions tested:
 * TinyUC 0.4.0 (Unicode 17.0.0)
 * utf8proc 2.12.0 (Unicode 18.0.0)
-* ICU 
-  * Windows: 72.1 (Windows Built-in, Unicode 15.1.0)
-  * Fedora 42: 76.1 (Unicode 16.0.0)
+* ICU 79.1 (downloaded prebuilt) or a system ICU of at least 74.0
 
-All libraries are dynamically linked and tested against C-APIs.
+The comparison binary reports the actual library build type, location, and size.
+The Windows in-box ICU is not used.
 
 Implementations compared:
-- normalization — tinyuc_normalize (quick-check fast path).
-- normalization-without-quickpath — tinyuc_normalize_full (control, always full algorithm, internal only).
-- normalization-utf8proc — utf8proc_map with STABLE + COMPOSE/DECOMPOSE/COMPAT.
-- normalization-icu — ICU C API unorm2_normalize with NFD/NFC/NFKD/NFKC instances; ICU is UTF-16, so this row includes the UTF-8→UTF-16→normalize→UTF-16→UTF-8 round trip. Not that fair, but since our philosophy is UTF-8 everywhere, this is what matters.
+- `tinyuc` — tinyuc_normalize (quick-check fast path).
+- `tinyuc-full` — tinyuc_normalize_full (control, always full algorithm, internal only).
+- `utf8proc` — utf8proc_map with STABLE + COMPOSE/DECOMPOSE/COMPAT.
+- `icu-utf8` — ICU C API on a UTF-8 input/output path. This row includes the
+  UTF-8→UTF-16→normalize→UTF-16→UTF-8 round trip.
+- `icu-utf16` — the same ICU operations on a pre-converted UTF-16 corpus, with
+  no UTF-8 conversion in the timed loop. This shows the raw ICU algorithm cost.
+
+The result tables below were recorded with the previous in-house runner. The
+current comparison binary uses the names above, and adds a `casefold` suite.
 
 ### Windows
 
@@ -54,7 +108,7 @@ normalization-icu                42.01 ms  41.95 ms  504.3 us  23.80 /s
 ## Verdict
 
 - TinyUC is faster than ICU on both Windows and Linux on this specific suite. The suite was not specifically chosen to beat anything.
-- utf8proc seems penalized in lack of a quick normalization check. The core algorithm is fast (compare against normalization-without-quickpath).
+- utf8proc seems penalized in lack of a quick normalization check. The core algorithm is fast (compare against full normalization).
 - ICU is penalized since it expects UTF-16.
 - This is before any targeted optimizations in the TinyUC library.
 
@@ -64,10 +118,10 @@ The library uses a single scalar decoder (`tinyuc_utf8_decode`): a branch chain
 on the lead byte, then a few shifts to assemble the codepoint. It was the
 fastest of the scalar decoders measured (see "Alternative algorithms explored").
 
-The `utf8-decoder` suite decodes an ASCII-heavy ~1 MiB buffer plus the five
+The `[utf8-decoder]` benchmark decodes an ASCII-heavy ~1 MiB buffer plus the five
 source forms of the UCD corpus concatenated (non-ASCII heavy). `decode` sums
 every codepoint; `count` only counts them. Run it with
-`tinyuc_benchmarks -s utf8-decoder -v`.
+`tinyuc_benchmarks "[utf8-decoder]"`.
 
 Windows (samples=500, trim=10%):
 
@@ -111,9 +165,10 @@ branch. Every kernel call is guarded, so a binary built with a higher tier still
 loads and runs on a CPU without those instructions and falls back to the next
 compiled tier, then to the portable code.
 
-The `utf8-simd` suite validates and counts the same ASCII-heavy ~1 MiB buffer and
-concatenated corpus used by `utf8-decoder`. The `-lib` rows go through the public
-API; the `-scalar` rows are an independent portable reference.
+The `[utf8-simd]` benchmark validates and counts the same ASCII-heavy ~1 MiB
+buffer and concatenated corpus used by `[utf8-decoder]`. The `-lib` rows go
+through the public API; the `-scalar` rows are an independent portable
+reference. Run it with `tinyuc_benchmarks "[utf8-simd]"`.
 
 Windows, samples=1000, trim=10%:
 
@@ -166,6 +221,26 @@ baseline tier can be compiled unconditionally:
   same lookup algorithm maps directly onto it. Implementing that backend is
   still pending (it cannot be built or benchmarked on the current x86 dev
   machine).
+
+## Grapheme clusters
+
+The `[grapheme]` suite counts extended grapheme clusters over the official UCD
+`GraphemeBreakTest.txt` corpus. Test cases are joined with newlines so adjacent
+cases cannot merge.
+
+- `count` calls `tinyuc_num_char()`.
+- `iterate` walks the same buffer with `tinyuc_next_char()`.
+- `tinyuc_compare "[grapheme]"` runs the same corpus against utf8proc and ICU.
+  `icu-utf8` includes the UTF-8 to UTF-16 conversion; `icu-utf16` uses the
+  pre-converted corpus.
+
+## Validation and counting
+
+The `validate` suites use `tinyuc_validate()` against utf8proc’s
+`utf8proc_iterate()` and ICU’s UTF-8 preflight. The `count` suites use
+`tinyuc_num_cp()` against the same utf8proc iterator. ICU reports `icu-utf8`
+with UTF-8 to UTF-16 conversion, and `icu-utf16` counting on the pre-converted
+text. TinyUC’s validation and counting paths can use its SIMD implementations.
 
 ## Alternative algorithms explored
 

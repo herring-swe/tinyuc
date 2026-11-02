@@ -70,7 +70,7 @@ Some settings may make more sense in user settings.json
 
 ## Debugging
 
-To debug a specific doctest example, add for instance this into launch.json
+To debug a specific Catch2 test, add for instance this into launch.json
 
 Example .vscode/launch.json
 
@@ -86,7 +86,7 @@ Example .vscode/launch.json
         "type": "cppvsdbg",
         "request": "launch",
         "program": "${command:cmake.launchTargetPath}",
-        "args": [ "-tc=unicode official normalization test" ],
+        "args": [ "unicode - official normalization test" ],
         "stopAtEntry": false,
         "cwd": "${workspaceFolder}",
         "environment": [],

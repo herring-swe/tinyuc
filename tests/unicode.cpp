@@ -13,7 +13,7 @@
 #include "private/utf8_iter.h"
 #include "ucd_corpus.h"
 
-#include <doctest.h>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
 #include <fstream>
@@ -209,8 +209,6 @@ static inline void test_norm_hex(const char* input, const char* hex_correct, tin
     const std::string correct = ucd_hex_to_utf8(hex_correct);
     test_norm(input, correct.c_str(), type);
 }
-
-TEST_SUITE_BEGIN("unicode");
 
 TEST_CASE("unicode - basics")
 {
@@ -550,7 +548,7 @@ TEST_CASE("unicode - official grapheme break test")
 
 TEST_CASE("unicode - validation")
 {
-    SUBCASE("valid strings")
+    SECTION("valid strings")
     {
         const char* valid[] = {
             "",
@@ -570,7 +568,7 @@ TEST_CASE("unicode - validation")
         CHECK(tinyuc_validate("a\0b", 3, nullptr) == TINYUC_OK);
     }
 
-    SUBCASE("invalid strings")
+    SECTION("invalid strings")
     {
         struct bad_case
         {
@@ -606,7 +604,7 @@ TEST_CASE("unicode - validation")
 
 TEST_CASE("unicode - codepoint encoding")
 {
-    SUBCASE("encode boundaries")
+    SECTION("encode boundaries")
     {
         struct enc_case
         {
@@ -640,7 +638,7 @@ TEST_CASE("unicode - codepoint encoding")
         }
     }
 
-    SUBCASE("encode invalid codepoint")
+    SECTION("encode invalid codepoint")
     {
         uint8_t buf[4] = {0};
         CHECK(tinyuc_encode_codepoint(buf, 0x110000) == -1);
@@ -650,7 +648,7 @@ TEST_CASE("unicode - codepoint encoding")
         CHECK(tinyuc_encode_codepoint(buf, 0xDFFF) == -1);
     }
 
-    SUBCASE("encode codepoints into buffer")
+    SECTION("encode codepoints into buffer")
     {
         const uint32_t cps[] = {0x41, 0xE9, 0x1F600}; // A, é, 😀
         char buf[16] = {0};
@@ -664,7 +662,7 @@ TEST_CASE("unicode - codepoint encoding")
         CHECK(memcmp(buf, "A\xC3\xA9\xF0\x9F\x98\x80", 7) == 0);
     }
 
-    SUBCASE("encode codepoints invalid")
+    SECTION("encode codepoints invalid")
     {
         const uint32_t bad[] = {0x41, 0x110000};
         char buf[16] = {0};
@@ -680,7 +678,7 @@ TEST_CASE("unicode - codepoint encoding")
         free(errmsg);
     }
 
-    SUBCASE("iterator decodes multi-byte")
+    SECTION("iterator decodes multi-byte")
     {
         const unsigned char* iter =
             reinterpret_cast<const unsigned char*>("A\xC3\xA9\xF0\x9F\x98\x80");
@@ -918,7 +916,7 @@ TEST_CASE("unicode - validate against a reference")
 
 TEST_CASE("unicode - character indexing")
 {
-    SUBCASE("tinyuc_char_index")
+    SECTION("tinyuc_char_index")
     {
         const char* str = "abcd";
         size_t len = 4;
@@ -932,7 +930,7 @@ TEST_CASE("unicode - character indexing")
         CHECK(tinyuc_char_index(nullptr, 0, 1) == 0);
     }
 
-    SUBCASE("tinyuc_next_char")
+    SECTION("tinyuc_next_char")
     {
         const char* str = "abcd";
         size_t len = 4;
@@ -946,7 +944,7 @@ TEST_CASE("unicode - character indexing")
         CHECK(tinyuc_next_char(str, len, TINYUC_NPOS) == TINYUC_NPOS);
     }
 
-    SUBCASE("char_index and next_char agree on graphemes")
+    SECTION("char_index and next_char agree on graphemes")
     {
         const char* str = "e\u0301x\xF0\x9F\x98\x80"; // é, x, 😀
         size_t len = strlen(str);
@@ -993,7 +991,7 @@ TEST_CASE("unicode - case-insensitive comparison")
 
 TEST_CASE("unicode - normalization forms")
 {
-    SUBCASE("enum to and from string")
+    SECTION("enum to and from string")
     {
         CHECK(std::string(tinyuc_norm_form_to_str(TINYUC_NORM_NFC)) == "NFC");
         CHECK(std::string(tinyuc_norm_form_to_str(TINYUC_NORM_NFD)) == "NFD");
@@ -1009,7 +1007,7 @@ TEST_CASE("unicode - normalization forms")
         CHECK(tinyuc_norm_form_from_str("") == TINYUC_NORM_INVALID);
     }
 
-    SUBCASE("normalize with TINYUC_NPOS length")
+    SECTION("normalize with TINYUC_NPOS length")
     {
         char* ostr = nullptr;
         size_t olen = 0;
@@ -1043,5 +1041,3 @@ TEST_CASE("unicode - mapping with explicit length")
     free(ostr);
     free(errmsg);
 }
-
-TEST_SUITE_END();

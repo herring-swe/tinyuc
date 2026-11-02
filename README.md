@@ -23,7 +23,7 @@ It aims to be small, portable and fast.
 
 - C11 for the core library
   - Headers declare `extern "C"` for import into C++
-  - Testing [doctest](https://github.com/doctest/doctest)] use C++
+  - Testing uses [Catch2](https://github.com/catchorg/Catch2) (C++)
 - OS:
   - Windows
   - Linux
@@ -54,6 +54,8 @@ This section needs verification.
 
 Development requirements (additional from above):
 
+- Catch2 3.16.1 (downloaded automatically for tests, or supplied externally)
+- utf8proc and ICU for `tinyuc_compare` (found or downloaded automatically)
 - Python 3.10 or later
 - Install python requirements:
   - python -m pip install -r tools/pyreq-dev.txt
@@ -83,6 +85,18 @@ cmake --build . --config Release
 ```
 
 It is recommended to use Ninja.
+
+Tests download and build Catch2 by default. To reuse an external Catch2
+install and skip that work, use the standard CMake package hints:
+
+```bash
+cmake -S . -B build -DCatch2_DIR=/path/to/catch2/lib/cmake/Catch2
+# or:
+cmake -S . -B build -DCatch2_ROOT=/path/to/catch2/prefix
+```
+
+The optional `tinyuc_compare` benchmark is built with
+`-DTINYUC_BENCH_COMPARE=ON` and compares TinyUC against utf8proc and ICU.
 
 ## Contributing
 

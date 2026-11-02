@@ -10,29 +10,14 @@
  * and ICU for comparison.
  */
 
-#include "unicode_bench.h"
-
 #include "tinyuc/unicode.h"
 
-#include "microbench.h"
 #include "private/utf8_iter.h"
 #include "ucd_corpus.h"
 
-#ifdef TINYUC_BENCH_UTF8PROC
-#include <utf8proc.h>
-#endif
+#include <catch2/benchmark/catch_benchmark.hpp>
+#include <catch2/catch_test_macros.hpp>
 
-#ifdef TINYUC_BENCH_ICU
-#if defined(_WIN32)
-// The in-box Windows ICU only ships the merged C header.
-#include <icu.h>
-#else
-#include <unicode/unorm2.h>
-#include <unicode/ustring.h>
-#endif
-#endif
-
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -41,6 +26,9 @@
 #ifdef __INTELLISENSE__
 #ifndef NORM_TEST_FILE
 #define NORM_TEST_FILE "dummy"
+#endif
+#ifndef GRAPHEME_TEST_FILE
+#define GRAPHEME_TEST_FILE "dummy"
 #endif
 #endif
 
@@ -57,6 +45,17 @@ const std::vector<ucd_norm_case>& corpus()
         return loaded;
     }();
     return tests;
+}
+
+/// Decoded GraphemeBreakTest corpus, with a newline between test cases.
+const std::string& grapheme_buffer()
+{
+    static const std::string buffer = [] {
+        std::string loaded;
+        ucd_load_grapheme_buffer(GRAPHEME_TEST_FILE, loaded);
+        return loaded;
+    }();
+    return buffer;
 }
 
 /// Run every corpus entry from every source form through all four
@@ -101,135 +100,6 @@ void normalize_corpus(norm_func fn)
             return norm_len;
         });
 }
-
-void normalize_quick()
-{
-    normalize_corpus(tinyuc_normalize);
-}
-
-void normalize_without_quickpath()
-{
-    normalize_corpus(tinyuc_normalize_full);
-}
-
-#ifdef TINYUC_BENCH_UTF8PROC
-/// Map a TINYUC normalization form to the equivalent utf8proc option flags.
-unsigned int utf8proc_options(enum tinyuc_norm_form form)
-{
-    switch (form)
-    {
-    case TINYUC_NORM_NFD:
-        return UTF8PROC_STABLE | UTF8PROC_DECOMPOSE;
-    case TINYUC_NORM_NFC:
-        return UTF8PROC_STABLE | UTF8PROC_COMPOSE;
-    case TINYUC_NORM_NFKD:
-        return UTF8PROC_STABLE | UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT;
-    case TINYUC_NORM_NFKC:
-        return UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_COMPAT;
-    default:
-        return UTF8PROC_STABLE;
-    }
-}
-
-void normalize_corpus_utf8proc()
-{
-    normalize_corpus_with([](const std::string& source, enum tinyuc_norm_form form) -> std::size_t {
-        utf8proc_uint8_t* dest = nullptr;
-        const utf8proc_ssize_t result =
-            utf8proc_map(reinterpret_cast<const utf8proc_uint8_t*>(source.data()),
-                         static_cast<utf8proc_ssize_t>(source.size()),
-                         &dest,
-                         utf8proc_options(form));
-        std::size_t size = 0;
-        if (result >= 0)
-            size = static_cast<std::size_t>(result);
-        utf8proc_free(dest);
-        return size;
-    });
-}
-#endif // TINYUC_BENCH_UTF8PROC
-
-#ifdef TINYUC_BENCH_ICU
-/// Resolve (and cache) the ICU normalizer for a TINYUC normalization form.
-const UNormalizer2* icu_normalizer_for(enum tinyuc_norm_form form)
-{
-    static const std::array<const UNormalizer2*, 4> instances = [] {
-        UErrorCode status = U_ZERO_ERROR;
-        return std::array<const UNormalizer2*, 4>{
-            unorm2_getNFDInstance(&status),
-            unorm2_getNFCInstance(&status),
-            unorm2_getNFKDInstance(&status),
-            unorm2_getNFKCInstance(&status),
-        };
-    }();
-
-    switch (form)
-    {
-    case TINYUC_NORM_NFD:
-        return instances[0];
-    case TINYUC_NORM_NFC:
-        return instances[1];
-    case TINYUC_NORM_NFKD:
-        return instances[2];
-    case TINYUC_NORM_NFKC:
-        return instances[3];
-    default:
-        return nullptr;
-    }
-}
-
-/// Convert UTF-8 to UTF-16 using the ICU size-first pattern: the first call
-/// only asks for the required length. Leaves a NUL terminator in `dest`.
-bool icu_utf8_to_utf16(const std::string& source, int32_t& utf16_len, std::vector<UChar>& dest)
-{
-    const int32_t src_len = static_cast<int32_t>(source.size());
-    UErrorCode status = U_ZERO_ERROR;
-    u_strFromUTF8(nullptr, 0, &utf16_len, source.data(), src_len, &status);
-    if (utf16_len < 0)
-        return false;
-
-    dest.resize(static_cast<std::size_t>(utf16_len) + 1);
-    status = U_ZERO_ERROR;
-    u_strFromUTF8(dest.data(), utf16_len + 1, &utf16_len, source.data(), src_len, &status);
-    return U_SUCCESS(status);
-}
-
-void normalize_corpus_icu()
-{
-    normalize_corpus_with([](const std::string& source, enum tinyuc_norm_form form) -> std::size_t {
-        const UNormalizer2* const normalizer = icu_normalizer_for(form);
-        if (normalizer == nullptr)
-            return 0;
-
-        std::vector<UChar> utf16;
-        int32_t utf16_len = 0;
-        if (!icu_utf8_to_utf16(source, utf16_len, utf16))
-            return 0;
-
-        UErrorCode status = U_ZERO_ERROR;
-        const int32_t norm_len =
-            unorm2_normalize(normalizer, utf16.data(), utf16_len, nullptr, 0, &status);
-        if (norm_len < 0)
-            return 0;
-
-        std::vector<UChar> normalized(static_cast<std::size_t>(norm_len) + 1);
-        status = U_ZERO_ERROR;
-        unorm2_normalize(normalizer,
-                         utf16.data(),
-                         utf16_len,
-                         normalized.data(),
-                         norm_len + 1,
-                         &status);
-        if (U_FAILURE(status))
-            return 0;
-
-        int32_t utf8_len = 0;
-        status = U_ZERO_ERROR;
-        u_strToUTF8(nullptr, 0, &utf8_len, normalized.data(), norm_len, &status);
-        return utf8_len > 0 ? static_cast<std::size_t>(utf8_len) : 0;
-    });
-}
-#endif // TINYUC_BENCH_ICU
 
 /* -------------------------------------------------------------------------- */
 /*                            UTF-8 iterator A/B                              */
@@ -281,25 +151,6 @@ std::uint64_t decode_sum(const std::string& text, Decode decode)
     return sum;
 }
 
-/// Count codepoints in both buffers with one decoder implementation.
-template <typename Count>
-std::uint64_t count_both(Count count)
-{
-    return static_cast<std::uint64_t>(count(ascii_buffer().data(), ascii_buffer().size())) +
-           static_cast<std::uint64_t>(count(corpus_buffer().data(), corpus_buffer().size()));
-}
-
-void decode_pass()
-{
-    g_iter_sink += decode_sum(ascii_buffer(), tinyuc_utf8_decode);
-    g_iter_sink += decode_sum(corpus_buffer(), tinyuc_utf8_decode);
-}
-
-void count_pass()
-{
-    g_iter_sink += count_both(tinyuc_utf8_count);
-}
-
 /* -------------------------------------------------------------------------- */
 /*                              SIMD validation                               */
 /* -------------------------------------------------------------------------- */
@@ -343,87 +194,75 @@ bool scalar_validate(const char* text, size_t len)
     return true;
 }
 
-/// Validate both buffers through the library (SIMD when built with TINYUC_SIMD).
-void validate_lib_pass()
-{
-    g_iter_sink +=
-        (tinyuc_validate(ascii_buffer().data(), ascii_buffer().size(), nullptr) == TINYUC_OK);
-    g_iter_sink +=
-        (tinyuc_validate(corpus_buffer().data(), corpus_buffer().size(), nullptr) == TINYUC_OK);
-}
-
-/// Validate both buffers with the portable reference above.
-void validate_scalar_pass()
-{
-    g_iter_sink += scalar_validate(ascii_buffer().data(), ascii_buffer().size());
-    g_iter_sink += scalar_validate(corpus_buffer().data(), corpus_buffer().size());
-}
-
-/// Count both buffers through the library (SIMD when built with TINYUC_SIMD).
-void count_lib_pass()
-{
-    g_iter_sink += (std::uint64_t)tinyuc_num_cp(ascii_buffer().data(), ascii_buffer().size());
-    g_iter_sink += (std::uint64_t)tinyuc_num_cp(corpus_buffer().data(), corpus_buffer().size());
-}
-
 } // namespace
 
-void register_unicode_benchmarks(tinyuc::microbench::benchmark& bench)
+TEST_CASE("normalization", "[benchmark][unicode][normalization]")
 {
-    tinyuc::microbench::suite& suite = bench.add_suite(
-        "unicode",
-        "Unicode normalization over the official UCD NormalizationTest corpus. A call normalizes "
-        "the whole corpus, so compare per-corpus time; characters per second is not meaningful.");
+    BENCHMARK("normalization")
+    {
+        normalize_corpus(tinyuc_normalize);
+    };
 
-    tinyuc::microbench::test& quick =
-        suite.add_test("normalization",
-                       "Convert every corpus entry from every source form into NFD, NFC, NFKD and "
-                       "NFKC using the quick check fast path",
-                       normalize_quick);
-    suite.add_test("normalization-without-quickpath",
-                   "Same conversions with the quick check disabled, always running the full "
-                   "decomposition/composition algorithm",
-                   normalize_without_quickpath);
+    BENCHMARK("normalization-without-quickpath")
+    {
+        normalize_corpus(tinyuc_normalize_full);
+    };
+}
 
-    quick.add_ref("normalization-without-quickpath", tinyuc::microbench::expectation::faster);
+TEST_CASE("grapheme", "[benchmark][unicode][grapheme]")
+{
+    BENCHMARK("count")
+    {
+        g_iter_sink += static_cast<std::uint64_t>(
+            tinyuc_num_char(grapheme_buffer().data(), grapheme_buffer().size()));
+    };
 
-#ifdef TINYUC_BENCH_UTF8PROC
-    suite.add_test("normalization-utf8proc",
-                   "Same conversions using utf8proc (utf8proc_map over the whole corpus)",
-                   normalize_corpus_utf8proc);
-    quick.add_ref("normalization-utf8proc", tinyuc::microbench::expectation::none);
-#endif
+    BENCHMARK("iterate")
+    {
+        const std::string& text = grapheme_buffer();
+        std::size_t offset = 0;
+        std::size_t count = 0;
+        while (offset < text.size())
+        {
+            offset = tinyuc_next_char(text.data(), text.size(), offset);
+            if (offset == TINYUC_NPOS)
+                break;
+            ++count;
+        }
+        g_iter_sink += static_cast<std::uint64_t>(count);
+    };
+}
 
-#ifdef TINYUC_BENCH_ICU
-    suite.add_test("normalization-icu",
-                   "Same conversions using ICU (UTF-8 to UTF-16, normalize, back to UTF-8)",
-                   normalize_corpus_icu);
-    quick.add_ref("normalization-icu", tinyuc::microbench::expectation::none);
-#endif
+TEST_CASE("utf8-simd", "[benchmark][unicode][utf8-simd]")
+{
+    /// Validate both buffers through the library (SIMD when built with TINYUC_SIMD).
+    BENCHMARK("validate-lib")
+    {
+        g_iter_sink +=
+            (tinyuc_validate(ascii_buffer().data(), ascii_buffer().size(), nullptr) == TINYUC_OK);
+        g_iter_sink +=
+            (tinyuc_validate(corpus_buffer().data(), corpus_buffer().size(), nullptr) == TINYUC_OK);
+    };
 
-    tinyuc::microbench::suite& iter = bench.add_suite(
-        "utf8-decoder",
-        "UTF-8 decoder and counter. Each call scans an ASCII-heavy ~1 MiB buffer and the "
-        "concatenated UCD corpus.");
+    /// Validate both buffers with the portable reference above.
+    BENCHMARK("validate-scalar")
+    {
+        g_iter_sink += scalar_validate(ascii_buffer().data(), ascii_buffer().size());
+        g_iter_sink += scalar_validate(corpus_buffer().data(), corpus_buffer().size());
+    };
 
-    iter.add_test("decode", "Branch-chain decoder: sum codepoints", decode_pass);
-    iter.add_test("count", "Scalar count over the same buffers", count_pass);
+    /// Count both buffers through the library (SIMD when built with TINYUC_SIMD).
+    BENCHMARK("count-lib")
+    {
+        g_iter_sink += (std::uint64_t)tinyuc_num_cp(ascii_buffer().data(), ascii_buffer().size());
+        g_iter_sink += (std::uint64_t)tinyuc_num_cp(corpus_buffer().data(), corpus_buffer().size());
+    };
 
-    tinyuc::microbench::suite& simd = bench.add_suite(
-        "utf8-simd",
-        "SIMD-accelerated UTF-8 paths (controlled by -DTINYUC_SIMD, default AUTO). The library "
-        "rows use the best tier the CPU supports; the scalar rows are independent references. "
-        "Each call scans the same ASCII-heavy ~1 MiB buffer and concatenated corpus.");
-
-    tinyuc::microbench::test& validate_lib =
-        simd.add_test("validate-lib", "tinyuc_validate over both buffers", validate_lib_pass);
-    simd.add_test("validate-scalar",
-                  "Portable reference validator over the same buffers",
-                  validate_scalar_pass);
-    validate_lib.add_ref("validate-scalar", tinyuc::microbench::expectation::none);
-
-    tinyuc::microbench::test& count_lib =
-        simd.add_test("count-lib", "tinyuc_num_cp over both buffers", count_lib_pass);
-    simd.add_test("count-scalar", "Portable scalar count over the same buffers", count_pass);
-    count_lib.add_ref("count-scalar", tinyuc::microbench::expectation::none);
+    BENCHMARK("count-scalar")
+    {
+        g_iter_sink +=
+            (std::uint64_t)tinyuc_utf8_count(ascii_buffer().data(), ascii_buffer().size());
+        g_iter_sink +=
+            (std::uint64_t)tinyuc_utf8_count(corpus_buffer().data(), corpus_buffer().size());
+    };
 }
