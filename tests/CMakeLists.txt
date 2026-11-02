@@ -27,6 +27,20 @@ enable_language(CXX)
 
 include(CTest)
 
+# Language corpus used by the large benchmark suites.
+set(TINYUC_BENCH_TEXT_ARCHIVE "${CMAKE_SOURCE_DIR}/data/benchmark.zip")
+set(TINYUC_BENCH_TEXT_DIR "${CMAKE_BINARY_DIR}/tinyuc_benchmark_text")
+
+if(NOT EXISTS "${TINYUC_BENCH_TEXT_ARCHIVE}")
+    message(FATAL_ERROR "Missing benchmark text archive: ${TINYUC_BENCH_TEXT_ARCHIVE}")
+endif()
+
+file(MAKE_DIRECTORY "${TINYUC_BENCH_TEXT_DIR}")
+file(ARCHIVE_EXTRACT
+    INPUT "${TINYUC_BENCH_TEXT_ARCHIVE}"
+    DESTINATION "${TINYUC_BENCH_TEXT_DIR}"
+)
+
 # Catch2 v3. An installed package is used when found; Catch2_DIR or
 # Catch2_ROOT can point CMake at an external installation. Otherwise a pinned
 # release archive is downloaded and built.
@@ -123,6 +137,9 @@ target_include_directories(tinyuc_benchmarks PRIVATE
 )
 target_compile_definitions(tinyuc_benchmarks PRIVATE NORM_TEST_FILE="${NORM_TEST_FILE}")
 target_compile_definitions(tinyuc_benchmarks PRIVATE GRAPHEME_TEST_FILE="${GRAPHEME_TEST_FILE}")
+target_compile_definitions(tinyuc_benchmarks PRIVATE
+    "TINYUC_BENCH_TEXT_DIR=\"${TINYUC_BENCH_TEXT_DIR}\""
+)
 
 # ----------------------------------------------------------------------------
 # Optional comparisons against external Unicode libraries

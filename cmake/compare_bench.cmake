@@ -221,23 +221,6 @@ if(NOT TINYUC_COMPARE_HAS_UTF8PROC AND NOT TINYUC_COMPARE_HAS_ICU)
 endif()
 
 # ----------------------------------------------------------------------------
-# Per-language benchmark texts
-# ----------------------------------------------------------------------------
-
-set(TINYUC_COMPARE_TEXT_ARCHIVE "${CMAKE_SOURCE_DIR}/data/benchmark.zip")
-set(TINYUC_COMPARE_TEXT_DIR "${CMAKE_BINARY_DIR}/tinyuc_benchmark_text")
-
-if(NOT EXISTS "${TINYUC_COMPARE_TEXT_ARCHIVE}")
-    message(FATAL_ERROR "Missing benchmark text archive: ${TINYUC_COMPARE_TEXT_ARCHIVE}")
-endif()
-
-file(MAKE_DIRECTORY "${TINYUC_COMPARE_TEXT_DIR}")
-file(ARCHIVE_EXTRACT
-    INPUT "${TINYUC_COMPARE_TEXT_ARCHIVE}"
-    DESTINATION "${TINYUC_COMPARE_TEXT_DIR}"
-)
-
-# ----------------------------------------------------------------------------
 # Comparison target
 # ----------------------------------------------------------------------------
 
@@ -287,7 +270,7 @@ target_include_directories(tinyuc_compare PRIVATE
 target_compile_definitions(tinyuc_compare PRIVATE
     NORM_TEST_FILE="${NORM_TEST_FILE}"
     GRAPHEME_TEST_FILE="${GRAPHEME_TEST_FILE}"
-    "TINYUC_COMPARE_TEXT_DIR=\"${TINYUC_COMPARE_TEXT_DIR}\""
+    "TINYUC_BENCH_TEXT_DIR=\"${TINYUC_BENCH_TEXT_DIR}\""
     TINYUC_COMPARE=1
     "TINYUC_COMPARE_BUILD_INFO=\"${TINYUC_COMPARE_BUILD_INFO}\""
     "TINYUC_COMPARE_TINYUC_LIB=\"$<TARGET_FILE:tinyuc>\""

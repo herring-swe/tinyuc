@@ -32,9 +32,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
-#include <iostream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -529,35 +526,13 @@ void grapheme_icu()
 const std::vector<text_case>& language_corpus()
 {
     static const std::vector<text_case> cached = [] {
-        struct language_file
-        {
-            const char* name;
-            const char* file;
-        };
-
-        static const language_file files[] = {
-            {"german", "Deutsch_.txt"},
-            {"japanese", "Japanese_.txt"},
-            {"korean", "Korean_.txt"},
-            {"vietnamese", "Vietnamese_.txt"},
-        };
-
         std::vector<text_case> loaded;
-        for (const language_file& file : files)
+        for (const ucd_language_text& base : ucd_language_texts())
         {
-            const std::string path = std::string(TINYUC_COMPARE_TEXT_DIR) + "/" + file.file;
-            std::ifstream stream(path.c_str(), std::ios::binary);
-            if (!stream)
-            {
-                std::cerr << "warning: missing benchmark text: " << path << '\n';
-                continue;
-            }
-
             text_case text;
-            text.file = file.file;
-            text.name = file.name;
-            text.text.assign(std::istreambuf_iterator<char>(stream),
-                             std::istreambuf_iterator<char>());
+            text.file = base.file;
+            text.name = base.name;
+            text.text = base.text;
 
 #ifdef TINYUC_COMPARE_HAS_ICU
             icu_utf8_to_utf16(text.text, text.utf16, text.utf16_len);

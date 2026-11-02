@@ -66,4 +66,24 @@ bool ucd_load_normalization_tests(const char* path, std::vector<ucd_norm_case>& 
  */
 bool ucd_load_grapheme_buffer(const char* path, std::string& buffer);
 
+#ifdef TINYUC_BENCH_TEXT_DIR
+/**
+ * @brief One language benchmark text file.
+ */
+struct ucd_language_text
+{
+    std::string file;
+    std::string name;
+    std::string text;
+};
+
+/**
+ * @brief Load the language benchmark texts from data/benchmark.zip.
+ *
+ * The files are extracted by CMake into TINYUC_BENCH_TEXT_DIR. Text is read
+ * as-is so LF line endings and the original UTF-8 encoding are preserved.
+ */
+const std::vector<ucd_language_text>& ucd_language_texts();
+#endif
+
 #endif // TINYUC_TESTS_UCD_CORPUS_H

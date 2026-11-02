@@ -33,11 +33,20 @@ reported twice: `icu-utf8` includes the UTF-8 to UTF-16 conversion and
 `icu-utf16` runs on a pre-converted corpus. `tinyuc_benchmarks` also has a
 `[grapheme]` suite with `count` and `iterate` variants.
 
-`tinyuc_compare` additionally extracts `data/benchmark.zip` and runs
-normalization, casefold, grapheme, validation, and codepoint-count suites for
-each language file (German, Japanese, Korean, and Vietnamese). These are UTF-8
-text files with LF line endings, so the suites report results such as
-`normalization - german`, `validate - german`, and `count - japanese`.
+Both binaries extract `data/benchmark.zip` and run normalization, casefold,
+grapheme, validation, and codepoint-count suites for each language file
+(German, Japanese, Korean, and Vietnamese). These are UTF-8 text files with LF
+line endings. The suites report results such as `normalization - german`,
+`validate - german`, and `count - japanese`.
+
+The language suites in `tinyuc_benchmarks` are tagged `large`, the language,
+and the benchmark type. For a focused profile of the workloads that matter:
+
+```bash
+tinyuc_benchmarks "[normalization][large]"
+```
+
+Or select a single language/type, for example `"[korean][normalization]"`.
 
 Markdown output, trimming, sample settings, and version/build reporting behave
 the same as in `tinyuc_benchmarks`.

@@ -194,6 +194,63 @@ bool scalar_validate(const char* text, size_t len)
     return true;
 }
 
+void normalize_language_text(const std::string& text, norm_func fn)
+{
+    static const enum tinyuc_norm_form forms[4] = {TINYUC_NORM_NFD,
+                                                   TINYUC_NORM_NFC,
+                                                   TINYUC_NORM_NFKD,
+                                                   TINYUC_NORM_NFKC};
+
+    std::uint64_t sink = 0;
+    for (const enum tinyuc_norm_form form : forms)
+    {
+        char* result = nullptr;
+        std::size_t result_len = 0;
+        if (fn(text.data(), text.size(), form, &result, &result_len, nullptr) == TINYUC_OK)
+            sink += result_len;
+        free(result);
+    }
+    g_norm_sink = g_norm_sink + sink;
+}
+
+void casefold_language_text(const std::string& text)
+{
+    char* result = nullptr;
+    std::size_t result_len = 0;
+    if (tinyuc_casefold(text.data(), text.size(), &result, &result_len, nullptr) == TINYUC_OK)
+        g_norm_sink += result_len;
+    free(result);
+}
+
+void grapheme_language_text(const std::string& text)
+{
+    g_iter_sink += static_cast<std::uint64_t>(tinyuc_num_char(text.data(), text.size()));
+}
+
+void validate_language_text(const std::string& text)
+{
+    g_iter_sink += tinyuc_validate(text.data(), text.size(), nullptr) == TINYUC_OK ? 1 : 0;
+}
+
+void count_language_text(const std::string& text)
+{
+    g_iter_sink += static_cast<std::uint64_t>(tinyuc_num_cp(text.data(), text.size()));
+}
+
+#ifdef TINYUC_BENCH_TEXT_DIR
+const ucd_language_text& language_text(const char* file)
+{
+    for (const ucd_language_text& text : ucd_language_texts())
+    {
+        if (text.file == file)
+            return text;
+    }
+
+    static const ucd_language_text empty;
+    return empty;
+}
+#endif
+
 } // namespace
 
 TEST_CASE("normalization", "[benchmark][unicode][normalization]")
@@ -266,3 +323,56 @@ TEST_CASE("utf8-simd", "[benchmark][unicode][utf8-simd]")
             (std::uint64_t)tinyuc_utf8_count(corpus_buffer().data(), corpus_buffer().size());
     };
 }
+
+#ifdef TINYUC_BENCH_TEXT_DIR
+#define TINYUC_LANGUAGE_BENCHMARK(NAME, FILE)                                         \
+    TEST_CASE("normalization - " NAME, "[benchmark][large][" NAME "][normalization]") \
+    {                                                                                 \
+        const ucd_language_text& text = language_text(FILE);                          \
+        BENCHMARK("normalization")                                                    \
+        {                                                                             \
+            normalize_language_text(text.text, tinyuc_normalize);                     \
+        };                                                                            \
+        BENCHMARK("normalization-without-quickpath")                                  \
+        {                                                                             \
+            normalize_language_text(text.text, tinyuc_normalize_full);                \
+        };                                                                            \
+    }                                                                                 \
+    TEST_CASE("casefold - " NAME, "[benchmark][large][" NAME "][casefold]")           \
+    {                                                                                 \
+        const ucd_language_text& text = language_text(FILE);                          \
+        BENCHMARK("casefold")                                                         \
+        {                                                                             \
+            casefold_language_text(text.text);                                        \
+        };                                                                            \
+    }                                                                                 \
+    TEST_CASE("grapheme - " NAME, "[benchmark][large][" NAME "][grapheme]")           \
+    {                                                                                 \
+        const ucd_language_text& text = language_text(FILE);                          \
+        BENCHMARK("count")                                                            \
+        {                                                                             \
+            grapheme_language_text(text.text);                                        \
+        };                                                                            \
+    }                                                                                 \
+    TEST_CASE("validate - " NAME, "[benchmark][large][" NAME "][validate]")           \
+    {                                                                                 \
+        const ucd_language_text& text = language_text(FILE);                          \
+        BENCHMARK("validate")                                                         \
+        {                                                                             \
+            validate_language_text(text.text);                                        \
+        };                                                                            \
+    }                                                                                 \
+    TEST_CASE("count - " NAME, "[benchmark][large][" NAME "][count]")                 \
+    {                                                                                 \
+        const ucd_language_text& text = language_text(FILE);                          \
+        BENCHMARK("count")                                                            \
+        {                                                                             \
+            count_language_text(text.text);                                           \
+        };                                                                            \
+    }
+
+TINYUC_LANGUAGE_BENCHMARK("german", "Deutsch_.txt")
+TINYUC_LANGUAGE_BENCHMARK("japanese", "Japanese_.txt")
+TINYUC_LANGUAGE_BENCHMARK("korean", "Korean_.txt")
+TINYUC_LANGUAGE_BENCHMARK("vietnamese", "Vietnamese_.txt")
+#endif // TINYUC_BENCH_TEXT_DIR

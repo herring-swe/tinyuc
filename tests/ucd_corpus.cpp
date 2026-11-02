@@ -15,7 +15,9 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <sstream>
+#include <utility>
 
 namespace {
 
@@ -181,3 +183,41 @@ bool ucd_load_grapheme_buffer(const char* path, std::string& buffer)
 
     return true;
 }
+
+#ifdef TINYUC_BENCH_TEXT_DIR
+const std::vector<ucd_language_text>& ucd_language_texts()
+{
+    static const std::vector<ucd_language_text> texts = [] {
+        struct language_file
+        {
+            const char* name;
+            const char* file;
+        };
+
+        static const language_file files[] = {
+            {"german", "Deutsch_.txt"},
+            {"japanese", "Japanese_.txt"},
+            {"korean", "Korean_.txt"},
+            {"vietnamese", "Vietnamese_.txt"},
+        };
+
+        std::vector<ucd_language_text> loaded;
+        for (const language_file& file : files)
+        {
+            const std::string path = std::string(TINYUC_BENCH_TEXT_DIR) + "/" + file.file;
+            std::ifstream stream(path.c_str(), std::ios::binary);
+            if (!stream)
+                continue;
+
+            ucd_language_text text;
+            text.file = file.file;
+            text.name = file.name;
+            text.text.assign(std::istreambuf_iterator<char>(stream),
+                             std::istreambuf_iterator<char>());
+            loaded.push_back(std::move(text));
+        }
+        return loaded;
+    }();
+    return texts;
+}
+#endif // TINYUC_BENCH_TEXT_DIR
