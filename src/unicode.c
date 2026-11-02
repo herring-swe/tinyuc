@@ -1585,10 +1585,25 @@ static bool tinyuc_is_normalized(const char* str, size_t size, enum tinyuc_norm_
     const bool compat = (form == TINYUC_NORM_NFKD || form == TINYUC_NORM_NFKC);
 
     uint8_t last_ccc = 0;
-    uint32_t cp;
+    const unsigned char* iter = (const unsigned char*)str;
+    const unsigned char* last = iter + size;
 
-    FOR_EACH_CODEPOINT(cp, str, size)
+    while (iter < last)
     {
+        // ASCII is already normalized in every form. Skip whole runs without
+        // decoding or property lookups.
+        if (*iter < 0x80)
+        {
+            while (iter < last && *iter < 0x80)
+                ++iter;
+            last_ccc = 0;
+            continue;
+        }
+
+        uint32_t cp = 0;
+        if (!tinyuc_iter_next(&iter, last, &cp))
+            break;
+
         if (is_hangul_syllable(cp))
         {
             // Hangul syllables are already composed (NFC/NFKC) but always decompose.
@@ -1630,9 +1645,8 @@ static bool tinyuc_is_normalized(const char* str, size_t size, enum tinyuc_norm_
             return false;
         last_ccc = ccc;
     }
-    FOR_EACH_CODEPOINT_CHECK_RET(false);
 
-    return true;
+    return iter == last;
 }
 
 static enum tinyuc_result normalize_common(const char* str,
